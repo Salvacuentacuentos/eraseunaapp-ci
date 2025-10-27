@@ -65,10 +65,10 @@ jobs:
           echo "Contenido de source/repos:"
           ls -la source/repos || true
 
-          CS=$(find source -maxdepth 4 -type f -name "Eraseunaapp.csproj" -print -quit)
+          CS=$(find source -maxdepth 6 -type f -name "Eraseunaapp.csproj" -print -quit)
           if [ -z "$CS" ]; then
             echo "No se encontró Eraseunaapp.csproj. Listado de .csproj cercanos:" >&2
-            find source -maxdepth 6 -type f -name "*.csproj" -print >&2
+            find source -maxdepth 8 -type f -name "*.csproj" -print >&2
             exit 1
           fi
           DIR=$(dirname "$CS")
@@ -178,19 +178,39 @@ jobs:
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
           echo "🔐 Certificado: $CERT_NAME"
 
-      - name: Install provisioning profile
+      - name: Install provisioning profile (robust)
         env:
           IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          if [ -z "${IOS_APPSTORE_PROFILE_B64:-}" ]; then
+            echo "❌ IOS_APPSTORE_PROFILE_B64 está vacío o no definido."
+            exit 1
+          fi
+
           PROFILE_RAW="$RUNNER_TEMP/app.mobileprovision"
-          echo "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PROFILE_RAW"
-          PP_UUID="$(
-            security cms -D -i "$PROFILE_RAW" | \
-            /usr/libexec/PlistBuddy -c 'Print:UUID' /dev/stdin
-          )"
+          printf %s "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PROFILE_RAW" || {
+            echo "❌ Base64 inválido para el .mobileprovision"; exit 1; }
+
+          BYTES=$(wc -c < "$PROFILE_RAW" | tr -d ' ')
+          if [ "$BYTES" -lt 1000 ]; then
+            echo "❌ El .mobileprovision decodificado es demasiado pequeño ($BYTES bytes). Revisa el secreto."
+            exit 1
+          fi
+
+          security cms -D -i "$PROFILE_RAW" > "$RUNNER_TEMP/profile.plist"
+          PP_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          PP_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
+          APP_ID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist" || true)
+          BUNDLE_ID=$(echo "$APP_ID" | sed 's/^[A-Z0-9]*\.//')
+
           echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
+          echo "PP_NAME=$PP_NAME" >> $GITHUB_ENV
+          echo "PP_BUNDLE_ID=$BUNDLE_ID" >> $GITHUB_ENV
+          echo "📄 Profile: $PP_NAME ($PP_UUID) — Bundle ID: $BUNDLE_ID"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
       # 9) Publicar y generar .ipa
@@ -213,7 +233,11 @@ jobs:
         id: findipa
         run: |
           set -euo pipefail
-          IPA_PATH="$(find "${{ steps.proj.outputs.srcdir }}/bin/Release/net8.0-ios/ios-arm64" -type f -name "*.ipa" -print -quit)"
+          # Buscar en publish primero; si no, en ios-arm64 completo
+          IPA_PATH="$(find "${{ steps.proj.outputs.srcdir }}/bin/Release/net8.0-ios/ios-arm64/publish" -type f -name "*.ipa" -print -quit)"
+          if [ -z "$IPA_PATH" ]; then
+            IPA_PATH="$(find "${{ steps.proj.outputs.srcdir }}/bin/Release/net8.0-ios/ios-arm64" -type f -name "*.ipa" -print -quit)"
+          fi
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           test -f "$IPA_PATH" && echo "IPA: $IPA_PATH"
 
