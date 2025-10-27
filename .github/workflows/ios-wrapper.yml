@@ -194,7 +194,7 @@ jobs:
             echo "❌ Base64 inválido para el .mobileprovision"; exit 1; }
 
           BYTES=$(wc -c < "$PROFILE_RAW" | tr -d ' ')
-          if [ "$BYTES" -lt 1000 ]; hos
+          if [ "$BYTES" -lt 1000 ]; then
             echo "❌ El .mobileprovision decodificado es demasiado pequeño ($BYTES bytes). Revisa el secreto."
             exit 1
           fi
