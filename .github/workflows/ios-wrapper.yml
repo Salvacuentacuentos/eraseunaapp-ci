@@ -93,6 +93,12 @@ jobs:
 
           echo "Proyecto detectado: $CS"
           ls -la "$DIR"
+                - name: Workload restore (iOS)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          dotnet workload restore "${{ steps.proj.outputs.csname }}" -p:TargetFramework=net8.0-ios
+
 
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
