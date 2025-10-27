@@ -194,7 +194,7 @@ jobs:
             echo "❌ Base64 inválido para el .mobileprovision"; exit 1; }
 
           BYTES=$(wc -c < "$PROFILE_RAW" | tr -d ' ')
-          if [ "$BYTES" -lt 1000 ]; then
+          if [ "$BYTES" -lt 1000 ]; hos
             echo "❌ El .mobileprovision decodificado es demasiado pequeño ($BYTES bytes). Revisa el secreto."
             exit 1
           fi
@@ -224,6 +224,7 @@ jobs:
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
+            -p:PublishTrimmed=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
             -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
             -p:TreatWarningsAsErrors=false \
