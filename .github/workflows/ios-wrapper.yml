@@ -78,75 +78,34 @@ jobs:
           echo "Carpeta:  $DIR"
           ls -la "$DIR"
 
-      # 5) **Nuevo**: restaurar workloads del proyecto (evita NETSDK1147)
-      - name: Workload restore (iOS)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet workload restore "${{ steps.proj.outputs.csproj }}"
+      # 5) Workload restore (iOS)  — SIN ruta
+- name: Workload restore (iOS)
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    dotnet workload restore
 
-      # 6) Restore normal
-      - name: Restore (iOS only)
-        run: |
-          set -euo pipefail
-          cd "${{ steps.proj.outputs.srcdir }}"
-          dotnet restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
+# 6) Restore (iOS only) — usar solo el nombre del csproj
+- name: Restore (iOS only)
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" -p:TargetFramework=net8.0-ios
 
-      # 7) Keychain y certificados
-      - name: Create & unlock keychain
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+# 8) Publish (.xcarchive) + .ipa — usar solo el nombre del csproj
+- name: Publish (.xcarchive) + .ipa
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    dotnet publish "$(basename "${{ steps.proj.outputs.csproj }}")" \
+      -c Release \
+      -f net8.0-ios \
+      -p:RuntimeIdentifier=ios-arm64 \
+      -p:ArchiveOnBuild=true \
+      -p:BuildIpa=true \
+      -p:CodesignKey="${{ env.CERT_NAME }}" \
+      -p:ProvisioningProfileUuid="${{ env.PP_UUID }}"
 
-      - name: Import .p12 into keychain
-        env:
-          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
-          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          P12="$RUNNER_TEMP/dist.p12"
-          echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
-          security import "$P12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A \
-                   -T /usr/bin/codesign -T /usr/bin/security
-          CERT_NAME="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | head -n1 | sed -E 's/.*"(.+)"/\1/')"
-          echo "CERT_NAME=$CERT_NAME" >> $GITHUB_ENV
-          echo "Certificado: $CERT_NAME"
-
-      - name: Install provisioning profile
-        env:
-          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          PROFILE_RAW="$RUNNER_TEMP/app.mobileprovision"
-          echo "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PROFILE_RAW"
-          PP_UUID="$(
-            security cms -D -i "$PROFILE_RAW" | \
-            /usr/libexec/PlistBuddy -c 'Print:UUID' /dev/stdin
-          )"
-          echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
-          cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
-
-      # 8) Compilar y generar .ipa
-      - name: Publish (.xcarchive) + .ipa
-        run: |
-          set -euo pipefail
-          cd "${{ steps.proj.outputs.srcdir }}"
-          dotnet publish "${{ steps.proj.outputs.csproj }}" \
-            -c Release \
-            -f net8.0-ios \
-            -p:RuntimeIdentifier=ios-arm64 \
-            -p:ArchiveOnBuild=true \
-            -p:BuildIpa=true \
-            -p:CodesignKey="${{ env.CERT_NAME }}" \
-            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}"
 
       - name: Find IPA
         id: findipa
