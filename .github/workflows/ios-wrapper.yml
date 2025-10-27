@@ -38,13 +38,16 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Point .NET to selected Xcode (MD_APPLE_SDK_ROOT)
+      - name: Point .NET to selected Xcode (DEVELOPER_DIR & MD_APPLE_SDK_ROOT)
         run: |
           set -euo pipefail
-          XCODE_PATH="$(xcode-select -p)"
-          echo "xcode-select -p => $XCODE_PATH"
+          XCODE_DEV="$(xcode-select -p)"                                     # /Applications/Xcode_16.1.app/Contents/Developer
+          XCODE_APP="$(dirname "$(dirname "$XCODE_DEV")")"                   # /Applications/Xcode_16.1.app
+          echo "xcode-select -p => $XCODE_DEV"
           xcodebuild -version
-          echo "MD_APPLE_SDK_ROOT=$XCODE_PATH" >> "$GITHUB_ENV"
+          echo "DEVELOPER_DIR=$XCODE_DEV"       >> "$GITHUB_ENV"
+          echo "MD_APPLE_SDK_ROOT=$XCODE_APP"   >> "$GITHUB_ENV"
+          echo "✅ Set MD_APPLE_SDK_ROOT=$XCODE_APP"
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
