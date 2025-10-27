@@ -6,7 +6,7 @@ on:
 env:
   DOTNET_VERSION: 8.0.415
   XCODE_VERSION: "15.4"
-  PROJECT_PATH: source/Eraseunaapp/Eraseunaapp.csproj
+  PROJECT_PATH: source/Eraseunaapp/Eraseunaapp/Eraseunaapp.csproj
   KEYCHAIN_PATH: ${{ github.workspace }}/build.keychain-db
 
 jobs:
