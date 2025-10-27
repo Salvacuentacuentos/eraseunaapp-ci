@@ -91,6 +91,29 @@ jobs:
   run: |
     set -euo pipefail
     dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" -p:TargetFramework=net8.0-ios
+    - name: Locate project (auto)
+  id: proj
+  run: |
+    set -euo pipefail
+    echo "Contenido de source/repos:"
+    ls -la source/repos || true
+
+    # Busca Eraseunaapp.csproj dentro de source/ (hasta 4 niveles)
+    CS=$(find source -maxdepth 4 -type f -name "Eraseunaapp.csproj" -print -quit)
+    if [ -z "$CS" ]; then
+      echo "No se encontró Eraseunaapp.csproj. Lista de .csproj cercanos:" >&2
+      find source -maxdepth 6 -type f -name "*.csproj" -print >&2
+      exit 1
+    fi
+
+    DIR=$(dirname "$CS")
+    echo "csproj=$CS"  >> "$GITHUB_OUTPUT"
+    echo "srcdir=$DIR" >> "$GITHUB_OUTPUT"
+
+    echo "Proyecto: $CS"
+    echo "Carpeta:  $DIR"
+    ls -la "$DIR"
+
 
 # 8) Publish (.xcarchive) + .ipa — usar solo el nombre del csproj
 - name: Publish (.xcarchive) + .ipa
