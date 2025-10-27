@@ -1,0 +1,170 @@
+name: iOS TestFlight (MAUI) — público → privado
+
+on:
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: 8.0.415
+  XCODE_VERSION: "15.4"
+  PROJECT_PATH: Eraseunaapp.csproj   # ajusta si tu .csproj no está en la raíz del repo privado
+  KEYCHAIN_PATH: ${{ runner.temp }}/build.keychain-db
+
+jobs:
+  build-and-upload:
+    runs-on: macos-14
+    permissions:
+      contents: read
+
+    steps:
+      # 1) Repo CI (este)
+      - name: Checkout (CI repo)
+        uses: actions/checkout@v4
+
+      # 2) Checkout del código PRIVADO usando la deploy key
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: Salvacuentacuentos/Eraseunaapp   # <-- ajusta si el nombre difiere
+          ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+          path: src
+
+      # 3) Xcode y .NET
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # 4) Cachés
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('src/**/packages.lock.json', 'src/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # 5) Workloads MAUI (iOS únicamente)
+      - name: Install MAUI workloads (iOS)
+        run: |
+          dotnet workload install maui ios --skip-manifest-update true
+
+      # 6) Restore
+      - name: Restore (iOS only)
+        working-directory: src
+        run: |
+          set -euo pipefail
+          dotnet restore "${{ env.PROJECT_PATH }}"
+
+      # 7) Llaves y perfil (keychain + p12 + mobileprovision)
+      - name: Create & unlock keychain
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "${{ env.KEYCHAIN_PATH }}"
+          security set-keychain-settings -lut 21600 "${{ env.KEYCHAIN_PATH }}"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "${{ env.KEYCHAIN_PATH }}"
+          security list-keychain -d user -s "${{ env.KEYCHAIN_PATH }}" login.keychain-db
+
+      - name: Import .p12 into keychain
+        env:
+          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security import "$RUNNER_TEMP/dist.p12" -k "${{ env.KEYCHAIN_PATH }}" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "${{ env.KEYCHAIN_PATH }}"
+          security find-identity -v -p codesigning
+
+      - name: Install provisioning profile
+        env:
+          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$RUNNER_TEMP/app.mobileprovision"
+          echo "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PROFILE_PATH"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print:UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+          echo "Installed profile UUID: $UUID"
+
+      # 8) Publicar (.xcarchive) con MAUI
+      - name: Publish (.xcarchive) + logs
+        working-directory: src
+        run: |
+          set -euo pipefail
+          dotnet publish "${{ env.PROJECT_PATH }}" \
+            -f net8.0-ios -c Release \
+            -p:ArchiveOnBuild=true \
+            -p:CodesignKeychain="${{ env.KEYCHAIN_PATH }}" \
+            -p:CodesignProvision="${PROFILE_UUID}" \
+            -bl:"$RUNNER_TEMP/build.binlog" /v:m
+          echo "XCARCHIVE_PATH=$(find . -type d -name '*.xcarchive' | head -n 1)" >> "$GITHUB_ENV"
+
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: ${{ runner.temp }}/build.binlog
+
+      # 9) Export .ipa (App Store)
+      - name: Export .ipa
+        env:
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: |
+          set -euo pipefail
+          echo "Archive: $XCARCHIVE_PATH"
+          EXP_PLIST="$RUNNER_TEMP/ExportOptions.plist"
+          cat > "$EXP_PLIST" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>__TEAM_ID__</string>
+            <key>uploadSymbols</key><true/>
+            <key>compileBitcode</key><false/>
+            <key>uploadBitcode</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          # Sustituye marcador por TEAM_ID sin tocar XML
+          /usr/bin/sed -i '' "s/__TEAM_ID__/${TEAM_ID}/g" "$EXP_PLIST"
+
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT_DIR"
+          xcodebuild -exportArchive -archivePath "$XCARCHIVE_PATH" -exportOptionsPlist "$EXP_PLIST" -exportPath "$EXPORT_DIR"
+          IPA_PATH=$(find "$EXPORT_DIR" -name "*.ipa" | head -n 1)
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+          ls -lah "$EXPORT_DIR"
+
+      # 10) Upload to TestFlight (Transporter API key)
+      - name: Upload to TestFlight
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY_P8: ${{ secrets.APPSTORE_PRIVATE_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          KEY_FILE="$RUNNER_TEMP/AuthKey_${APPSTORE_KEY_ID}.p8"
+          printf "%s" "$APPSTORE_PRIVATE_KEY_P8" > "$KEY_FILE"
+          xcrun iTMSTransporter -apiKey "$APPSTORE_KEY_ID" -apiIssuer "$APPSTORE_ISSUER_ID" \
+            -v informational -m upload -assetFile "$IPA_PATH"
+
+      # 11) Guardar artefactos (ipa + dSYM opcional)
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipa+symbols
+          path: |
+            ${{ env.IPA_PATH }}
+            ${{ runner.temp }}/export/*.dSYM.zip
