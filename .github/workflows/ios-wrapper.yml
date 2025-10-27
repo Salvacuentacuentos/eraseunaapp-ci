@@ -25,8 +25,8 @@ jobs:
       - name: Checkout private source
         uses: actions/checkout@v4
         with:
-          repository: Salvacuentacuentos/Eraseunaapp
-          # ref: master   # ajusta si tu rama es otra
+          repository: Salvacuentacuentos/Eraseunaapp    # <- repo PRIVADO
+          # ref: master                                 # descomenta si usas otra rama
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
@@ -44,7 +44,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj', 'source/**/**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
@@ -61,10 +61,10 @@ jobs:
           echo "Contenido de source/repos:"
           ls -la source/repos || true
 
-          CS=$(find source -maxdepth 4 -type f -name "Eraseunaapp.csproj" -print -quit)
+          CS=$(find source/repos -maxdepth 8 -type f -name "Eraseunaapp.csproj" -print -quit)
           if [ -z "$CS" ]; then
-            echo "No se encontró Eraseunaapp.csproj. Listado de .csproj cercanos:" >&2
-            find source -maxdepth 6 -type f -name "*.csproj" -print >&2
+            echo "No se encontró Eraseunaapp.csproj. Mostrando .csproj cercanos:" >&2
+            find source/repos -maxdepth 8 -type f -name "*.csproj" -print >&2
             exit 1
           fi
           DIR=$(dirname "$CS")
@@ -90,7 +90,7 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
       - name: Import .p12 into keychain
         env:
