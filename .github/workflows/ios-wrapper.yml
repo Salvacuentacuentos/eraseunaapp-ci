@@ -19,30 +19,20 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # 1) Repo CI (este)
       - name: Checkout (CI repo)
         uses: actions/checkout@v4
 
+      # 2) Repo privado con el código
       - name: Checkout private source
         uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
+          # ref: master     # <- ajusta si tu rama es otra
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      # 🔒 Fijar SDK 8.0.415 para toda la carpeta source/repos
-      - name: Pin .NET 8 via global.json
-        run: |
-          cat > source/repos/global.json <<'JSON'
-          {
-            "sdk": {
-              "version": "8.0.415",
-              "rollForward": "disable"
-            }
-          }
-          JSON
-          echo "global.json creado en source/repos:"
-          cat source/repos/global.json
-
+      # 3) Herramientas
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -52,10 +42,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: dotnet --info (verificación)
-        working-directory: source/repos
-        run: dotnet --info
 
       - name: Cache NuGet
         uses: actions/cache@v4
@@ -68,46 +54,45 @@ jobs:
       - name: Install MAUI workloads (iOS)
         run: |
           set -euo pipefail
+          dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
 
-      # Detecta el .csproj y prepara outputs
+      # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
         id: proj
         run: |
           set -euo pipefail
-          echo "== Lista nivel 2 de source/repos =="
-          find source/repos -maxdepth 2 -type d -print
+          echo "Contenido de source/repos:"
+          ls -la source/repos || true
 
-          CS=$(find source/repos -maxdepth 6 -type f -name "Eraseunaapp.csproj" -print -quit)
+          CS=$(find source -maxdepth 4 -type f -name "Eraseunaapp.csproj" -print -quit)
           if [ -z "$CS" ]; then
-            echo "No se encontró Eraseunaapp.csproj. Mostrando .csproj cercanos:" >&2
-            find source/repos -maxdepth 6 -type f -name "*.csproj" -print >&2
+            echo "No se encontró Eraseunaapp.csproj. Listado de .csproj cercanos:" >&2
+            find source -maxdepth 6 -type f -name "*.csproj" -print >&2
             exit 1
           fi
           DIR=$(dirname "$CS")
-          BASE=$(basename "$CS")
-
-          echo "csproj=$CS"   >> "$GITHUB_OUTPUT"
-          echo "srcdir=$DIR"  >> "$GITHUB_OUTPUT"
-          echo "csname=$BASE" >> "$GITHUB_OUTPUT"
-
-          echo "Proyecto detectado: $CS"
+          echo "csproj=$CS"   >> $GITHUB_OUTPUT
+          echo "srcdir=$DIR"  >> $GITHUB_OUTPUT
+          echo "Proyecto: $CS"
+          echo "Carpeta:  $DIR"
           ls -la "$DIR"
-                - name: Workload restore (iOS)
+
+      # 5) **Nuevo**: restaurar workloads del proyecto (evita NETSDK1147)
+      - name: Workload restore (iOS)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          dotnet workload restore "${{ steps.proj.outputs.csname }}" -p:TargetFramework=net8.0-ios
+          dotnet workload restore "${{ steps.proj.outputs.csproj }}"
 
-
+      # 6) Restore normal
       - name: Restore (iOS only)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          dotnet restore "${{ steps.proj.outputs.csname }}" \
-            -p:TargetFramework=net8.0-ios \
-            -p:WarningsNotAsErrors=NU1605
+          cd "${{ steps.proj.outputs.srcdir }}"
+          dotnet restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
 
+      # 7) Keychain y certificados
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -149,19 +134,19 @@ jobs:
           echo "PP_UUID=$PP_UUID" >> $GITHUB_ENV
           cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
+      # 8) Compilar y generar .ipa
       - name: Publish (.xcarchive) + .ipa
-        working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          dotnet publish "${{ steps.proj.outputs.csname }}" \
+          cd "${{ steps.proj.outputs.srcdir }}"
+          dotnet publish "${{ steps.proj.outputs.csproj }}" \
             -c Release \
             -f net8.0-ios \
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
-            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
-            -p:WarningsNotAsErrors=NU1605
+            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}"
 
       - name: Find IPA
         id: findipa
@@ -171,6 +156,7 @@ jobs:
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           test -f "$IPA_PATH" && echo "IPA: $IPA_PATH"
 
+      # 9) Subir a TestFlight
       - name: Upload to TestFlight
         if: steps.findipa.outputs.ipa != ''
         env:
@@ -189,6 +175,7 @@ jobs:
             -apiIssuer "$APPSTORE_ISSUER_ID" \
             -assetFile "$IPA" -v
 
+      # 10) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
