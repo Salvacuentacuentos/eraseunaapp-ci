@@ -6,7 +6,7 @@ on:
 env:
   DOTNET_VERSION: 8.0.415
   XCODE_VERSION: "15.4"
-  PROJECT_PATH: Eraseunaapp.csproj   # ajusta si tu .csproj no está en la raíz del repo privado
+  PROJECT_PATH: source/Eraseunaapp.csproj  
   KEYCHAIN_PATH: ${{ github.workspace }}/build.keychain-db
 
 jobs:
