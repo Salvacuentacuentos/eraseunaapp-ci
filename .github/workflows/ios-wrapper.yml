@@ -29,6 +29,20 @@ jobs:
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
+      # 🔒 Fijar SDK 8.0.415 para toda la carpeta source/repos
+      - name: Pin .NET 8 via global.json
+        run: |
+          cat > source/repos/global.json <<'JSON'
+          {
+            "sdk": {
+              "version": "8.0.415",
+              "rollForward": "disable"
+            }
+          }
+          JSON
+          echo "global.json creado en source/repos:"
+          cat source/repos/global.json
+
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -38,6 +52,10 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: dotnet --info (verificación)
+        working-directory: source/repos
+        run: dotnet --info
 
       - name: Cache NuGet
         uses: actions/cache@v4
@@ -50,7 +68,6 @@ jobs:
       - name: Install MAUI workloads (iOS)
         run: |
           set -euo pipefail
-          dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
 
       # Detecta el .csproj y prepara outputs
@@ -70,8 +87,8 @@ jobs:
           DIR=$(dirname "$CS")
           BASE=$(basename "$CS")
 
-          echo "csproj=$CS"  >> "$GITHUB_OUTPUT"
-          echo "srcdir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "csproj=$CS"   >> "$GITHUB_OUTPUT"
+          echo "srcdir=$DIR"  >> "$GITHUB_OUTPUT"
           echo "csname=$BASE" >> "$GITHUB_OUTPUT"
 
           echo "Proyecto detectado: $CS"
@@ -81,9 +98,9 @@ jobs:
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          echo "PWD=$(pwd)"
-          ls -la
-          dotnet restore "${{ steps.proj.outputs.csname }}" -p:TargetFramework=net8.0-ios
+          dotnet restore "${{ steps.proj.outputs.csname }}" \
+            -p:TargetFramework=net8.0-ios \
+            -p:WarningsNotAsErrors=NU1605
 
       - name: Create & unlock keychain
         env:
@@ -137,7 +154,8 @@ jobs:
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
-            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}"
+            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
+            -p:WarningsNotAsErrors=NU1605
 
       - name: Find IPA
         id: findipa
