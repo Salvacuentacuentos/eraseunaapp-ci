@@ -122,19 +122,66 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
-      - name: Import .p12 into keychain
-        env:
-          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
-          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          P12="$RUNNER_TEMP/dist.p12"
-          echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
-          security import "$P12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A \
-                   -T /usr/bin/codesign -T /usr/bin/security
-          CERT_NAME="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | head -n1 | sed -E 's/.*"(.+)"/\1/')"
-          echo "CERT_NAME=$CERT_NAME" >> $GITHUB_ENV
-          echo "Certificado: $CERT_NAME"
+      - name: Import .p12 into keychain and allow codesign (robust)
+  shell: bash
+  env:
+    KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+    IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+    IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+  run: |
+    set -euo pipefail
+
+    KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+    P12_PATH="$RUNNER_TEMP/dist.p12"
+
+    # 0) Sanity checks
+    if [ -z "${IOS_DISTRIBUTION_P12_BASE64:-}" ]; then
+      echo "❌ IOS_DISTRIBUTION_P12_BASE64 está vacío (¿secreto mal puesto o con nombre distinto?)."
+      exit 1
+    fi
+    if [ -z "${IOS_DISTRIBUTION_P12_PASSWORD:-}" ]; then
+      echo "❌ IOS_DISTRIBUTION_P12_PASSWORD está vacío."
+      exit 1
+    fi
+
+    # 1) Crear/unlock keychain si no existe
+    security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+    security set-keychain-settings "$KEYCHAIN_PATH"
+    security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+    # 2) Decodificar Base64 → .p12
+    printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12_PATH" || {
+      echo "❌ Fallo al decodificar el Base64 del .p12"; exit 1; }
+    if [ ! -s "$P12_PATH" ]; then
+      echo "❌ El .p12 decodificado está vacío. Revisa el secreto (nombre/valor)."
+      exit 1
+    fi
+
+    # 3) Validar contraseña con openssl (falla si la pass no coincide)
+    if ! openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -info -nokeys >/dev/null 2>&1; then
+      echo "❌ La contraseña del .p12 no es válida (MAC verification)."
+      exit 1
+    fi
+
+    # 4) Intentar importar; si falla, reempaquetar a formato legacy y reintentar
+    if security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 \
+        -T /usr/bin/codesign -T /usr/bin/security; then
+      echo "✅ Import OK (p12 original)."
+    else
+      echo "ℹ️ Reempaquetando .p12 a formato legacy y reintentando…"
+      openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/tmp.pem"
+      openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -passout pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -out "$RUNNER_TEMP/dist-legacy.p12"
+      security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 \
+        -T /usr/bin/codesign -T /usr/bin/security
+      echo "✅ Import OK (formato legacy)."
+    fi
+
+    # 5) Permisos para codesign/xcodebuild y exponer nombre del certificado
+    security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+    CERT_NAME="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n1)"
+    echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
+    echo "🔐 Certificado: $CERT_NAME"
+
 
       - name: Install provisioning profile
         env:
