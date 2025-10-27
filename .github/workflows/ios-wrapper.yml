@@ -12,7 +12,7 @@ permissions:
 
 env:
   DOTNET_VERSION: 8.0.415
-  XCODE_VERSION: "16.1"   # ← iOS 18 SDK (requerido por Microsoft.iOS 18.x)
+  XCODE_VERSION: "16.1"   # iOS 18 SDK requerido por Microsoft.iOS 18.x
 
 jobs:
   build-and-upload:
@@ -41,9 +41,10 @@ jobs:
       - name: Point .NET to selected Xcode (MD_APPLE_SDK_ROOT)
         run: |
           set -euo pipefail
-          echo "DEVELOPER_DIR=$DEVELOPER_DIR"
+          XCODE_PATH="$(xcode-select -p)"
+          echo "xcode-select -p => $XCODE_PATH"
           xcodebuild -version
-          echo "MD_APPLE_SDK_ROOT=$DEVELOPER_DIR" >> $GITHUB_ENV
+          echo "MD_APPLE_SDK_ROOT=$XCODE_PATH" >> "$GITHUB_ENV"
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
