@@ -251,15 +251,16 @@ jobs:
           fi
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           test -f "$IPA_PATH" && echo "IPA: $IPA_PATH"
-          - name: Inspect IPA bundle id & icon name
-  shell: bash
-  run: |
-    set -euo pipefail
-    IPA="${{ steps.findipa.outputs.ipa }}"
-    PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
-    echo "BundleId: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-    echo "IconName: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
+      - name: Inspect IPA bundle id & icon name
+        if: steps.findipa.outputs.ipa != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
+          echo "BundleId: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
+          echo "IconName: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
       # 10) Subir a TestFlight (altool robusto con validación de clave)
       - name: Upload to TestFlight
