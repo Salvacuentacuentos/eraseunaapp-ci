@@ -238,6 +238,7 @@ jobs:
             -p:PublishTrimmed=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
             -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
+            -p:CFBundleVersion=${{ github.run_number }}
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
