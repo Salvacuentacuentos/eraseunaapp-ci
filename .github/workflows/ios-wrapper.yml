@@ -104,21 +104,21 @@ jobs:
           echo "Usando dotnet SDK:" && dotnet --version
 
       # 6) Workload restore (iOS) — apuntando al csproj concreto
-- name: Workload restore (iOS)
-  working-directory: ${{ steps.proj.outputs.srcdir }}
-  run: |
-    set -euo pipefail
-    dotnet workload restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
+      - name: Workload restore (iOS)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          dotnet workload restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
 
-# 7) Restore (iOS only)
-- name: Restore (iOS only)
-  working-directory: ${{ steps.proj.outputs.srcdir }}
-  run: |
-    set -euo pipefail
-    dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
-      -p:TargetFramework=net8.0-ios \
-      -p:TreatWarningsAsErrors=false \
-      -p:NoWarn=NU1605
+      # 7) Restore (iOS only)
+      - name: Restore (iOS only)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
+            -p:TargetFramework=net8.0-ios \
+            -p:TreatWarningsAsErrors=false \
+            -p:NoWarn=NU1605
 
       # 8) Keychain
       - name: Create & unlock keychain
@@ -274,11 +274,14 @@ jobs:
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           BID="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-          SVER="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin)"
+          SVER="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin || true)"
           BNUM="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /dev/stdin)"
           ICON="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin || true)"
+          if [ -z "${ICON:-}" ]; then
+            ICON="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' /dev/stdin || true)"
+          fi
           echo "BundleId: $BID"
-          echo "DisplayVersion (CFBundleShortVersionString): $SVER"
+          echo "DisplayVersion (CFBundleShortVersionString): ${SVER:-<none>}"
           echo "BuildNumber (CFBundleVersion): $BNUM"
           echo "IconName (CFBundleIconName): ${ICON:-<missing>}"
           if [ -z "${ICON:-}" ]; then
