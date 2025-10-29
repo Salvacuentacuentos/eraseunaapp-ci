@@ -93,6 +93,7 @@ jobs:
       - name: Pin .NET 8 SDK (global.json)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
+          set -euo pipefail
           cat > global.json <<'JSON'
           {
             "sdk": {
@@ -103,32 +104,39 @@ jobs:
           JSON
           echo "Usando dotnet SDK:" && dotnet --version
 
-           # 6) Workload restore (iOS) — SDK 8 desde srcdir, csproj absoluto y TFM forzado
-- name: Workload restore (iOS)
-  working-directory: ${{ steps.proj.outputs.srcdir }}
-  run: |
-    set -euo pipefail
-    echo "SRC: $(pwd)"
-    echo "CSPROJ: ${{ steps.proj.outputs.csproj }}"
-    test -f "${{ steps.proj.outputs.csproj }}" || { echo "::error::No existe el csproj en esa ruta"; exit 1; }
-    dotnet --version     # debería ser 8.0.415
-    dotnet workload restore --project "${{ steps.proj.outputs.csproj }}" \
-      -p:TargetFramework=net8.0-ios \
-      -p:TargetFrameworks=net8.0-ios
+      - name: Assert SDK 8.0.415
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          V=$(dotnet --version)
+          [ "$V" = "8.0.415" ] || { echo "::error::Usando SDK $V en vez de 8.0.415"; exit 1; }
 
-# 7) Restore (iOS only) — idem
-- name: Restore (iOS only)
-  working-directory: ${{ steps.proj.outputs.srcdir }}
-  run: |
-    set -euo pipefail
-    dotnet --version     # debería ser 8.0.415
-    dotnet restore "${{ steps.proj.outputs.csproj }}" \
-      -p:TargetFramework=net8.0-ios \
-      -p:TargetFrameworks=net8.0-ios \
-      -p:CheckEolTargetFramework=false \
-      -p:SuppressTfmSupportBuildCheck=true \
-      -p:TreatWarningsAsErrors=false \
-      -p:NoWarn=NU1605
+      # 6) Workload restore (iOS) — SDK 8 desde srcdir, csproj absoluto y TFM forzado
+      - name: Workload restore (iOS)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          echo "SRC: $(pwd)"
+          echo "CSPROJ: ${{ steps.proj.outputs.csproj }}"
+          test -f "${{ steps.proj.outputs.csproj }}" || { echo "::error::No existe el csproj en esa ruta"; exit 1; }
+          dotnet --version     # debería ser 8.0.415
+          dotnet workload restore --project "${{ steps.proj.outputs.csproj }}" \
+            -p:TargetFramework=net8.0-ios \
+            -p:TargetFrameworks=net8.0-ios
+
+      # 7) Restore (iOS only) — idem
+      - name: Restore (iOS only)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          dotnet --version     # debería ser 8.0.415
+          dotnet restore "${{ steps.proj.outputs.csproj }}" \
+            -p:TargetFramework=net8.0-ios \
+            -p:TargetFrameworks=net8.0-ios \
+            -p:CheckEolTargetFramework=false \
+            -p:SuppressTfmSupportBuildCheck=true \
+            -p:TreatWarningsAsErrors=false \
+            -p:NoWarn=NU1605
 
       # 8) Keychain
       - name: Create & unlock keychain
@@ -317,11 +325,6 @@ jobs:
           fi
           chmod 600 "$KEYFILE"
 
-          if ! openssl pkey -in "$KEYFILE" -noout >/dev/null 2>&1; then
-            echo "❌ La APPSTORE_PRIVATE_KEY no es una .p8 válida."
-            exit 1
-          fi
-
           if ! xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null 2>&1; then
             echo "❌ Falló la autenticación con App Store Connect."
             exit 1
@@ -339,4 +342,3 @@ jobs:
             ${{ steps.findipa.outputs.ipa }}
             $HOME/Library/Logs/DiagnosticReports/*
           if-no-files-found: ignore
-
