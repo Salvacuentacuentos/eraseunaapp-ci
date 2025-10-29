@@ -103,22 +103,22 @@ jobs:
           JSON
           echo "Usando dotnet SDK:" && dotnet --version
 
-      # 6) Workload restore (iOS)
-      - name: Workload restore (iOS)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet workload restore
+      # 6) Workload restore (iOS) — apuntando al csproj concreto
+- name: Workload restore (iOS)
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    dotnet workload restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
 
-      # 7) Restore (iOS only)
-      - name: Restore (iOS only)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
-            -p:TargetFramework=net8.0-ios \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
+# 7) Restore (iOS only)
+- name: Restore (iOS only)
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
+      -p:TargetFramework=net8.0-ios \
+      -p:TreatWarningsAsErrors=false \
+      -p:NoWarn=NU1605
 
       # 8) Keychain
       - name: Create & unlock keychain
