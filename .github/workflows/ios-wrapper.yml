@@ -67,6 +67,7 @@ jobs:
           set -euo pipefail
           dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
+          dotnet workload list
 
       # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
@@ -103,14 +104,7 @@ jobs:
           JSON
           echo "Usando dotnet SDK:" && dotnet --version
 
-      # 6) Workload restore (iOS) — apuntando al csproj concreto
-      - name: Workload restore (iOS)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet workload restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
-
-      # 7) Restore (iOS only)
+      # 6) Restore (iOS only)  ← (eliminaron el workload restore problemático)
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -120,7 +114,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 8) Keychain
+      # 7) Keychain
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -205,7 +199,7 @@ jobs:
             echo "❌ Base64 inválido para el .mobileprovision"; exit 1; }
 
           BYTES=$(wc -c < "$PROFILE_RAW" | tr -d ' ')
-          if [ "$BYTES" -lt 1000 ]; then
+          if [ "$BYTES" -lt 1000 ]; entonces
             echo "❌ El .mobileprovision decodificado es demasiado pequeño ($BYTES bytes). Revisa el secreto."
             exit 1
           fi
@@ -224,7 +218,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 9) Build number único (timestamp UTC) => evita 409 de versión duplicada
+      # 8) Build number único (timestamp UTC)
       - name: Compute build number (UTC timestamp)
         id: buildno
         shell: bash
@@ -234,7 +228,7 @@ jobs:
           echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
           echo "🔢 BUILD_NUMBER=$BN"
 
-      # 10) Publicar y generar .ipa
+      # 9) Publicar y generar .ipa
       - name: Publish (.xcarchive) + .ipa
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -288,7 +282,7 @@ jobs:
             echo "❌ Falta CFBundleIconName en Info.plist. Revisa <MauiIcon> y/o Info.plist."; exit 1;
           fi
 
-      # 11) Subir a TestFlight (altool robusto con validación de clave)
+      # 10) Subir a TestFlight
       - name: Upload to TestFlight
         if: steps.findipa.outputs.ipa != ''
         env:
@@ -328,7 +322,7 @@ jobs:
 
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 12) Artefactos
+      # 11) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
