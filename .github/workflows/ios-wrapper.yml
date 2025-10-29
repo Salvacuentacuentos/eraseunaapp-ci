@@ -84,23 +84,24 @@ jobs:
           dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
 
-      # ✅ FIX: no pasar la ruta (o usar solo el basename)
-      - name: Workload restore (iOS)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet workload restore -p:TargetFramework=net8.0-ios
-          # Alternativa equivalente:
-          # dotnet workload restore "$(basename "${{ steps.proj.outputs.csproj }}")" -p:TargetFramework=net8.0-ios
+      # 6) Workload restore (iOS) — usando --project absoluto
+- name: Workload restore (iOS)
+  run: |
+    set -euo pipefail
+    PROJ="${{ github.workspace }}/${{ steps.proj.outputs.csproj }}"
+    echo "Restoring workloads for: $PROJ"
+    dotnet workload restore --project "$PROJ" -p:TargetFramework=net8.0-ios
 
-      - name: Restore (iOS only)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
-            -p:TargetFramework=net8.0-ios \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
+# 7) Restore (iOS only) — también con --project absoluto
+- name: Restore (iOS only)
+  run: |
+    set -euo pipefail
+    PROJ="${{ github.workspace }}/${{ steps.proj.outputs.csproj }}"
+    dotnet restore "$PROJ" \
+      -p:TargetFramework=net8.0-ios \
+      -p:TreatWarningsAsErrors=false \
+      -p:NoWarn=NU1605
+
 
       - name: Create & unlock keychain
         env:
