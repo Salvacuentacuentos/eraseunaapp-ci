@@ -247,6 +247,7 @@ jobs:
             -p:BuildIpa=true \
             -p:ApplicationVersion=${{ env.BUILD_NUMBER }} \
             -p:CFBundleVersion=${{ env.BUILD_NUMBER }} \
+            -p:CFBundleIconName=AppIcon \
             -p:MtouchLink=SdkOnly \
             -p:PublishTrimmed=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
@@ -265,16 +266,24 @@ jobs:
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           test -f "$IPA_PATH" && echo "IPA: $IPA_PATH"
 
-      - name: Inspect IPA bundle id & versions
+      - name: Inspect IPA bundle id, versions & icon name
         if: steps.findipa.outputs.ipa != ''
         shell: bash
         run: |
           set -euo pipefail
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
-          echo "BundleId: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-          echo "DisplayVersion (CFBundleShortVersionString): $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin)"
-          echo "BuildNumber (CFBundleVersion): $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /dev/stdin)"
+          BID="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
+          SVER="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin)"
+          BNUM="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /dev/stdin)"
+          ICON="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin || true)"
+          echo "BundleId: $BID"
+          echo "DisplayVersion (CFBundleShortVersionString): $SVER"
+          echo "BuildNumber (CFBundleVersion): $BNUM"
+          echo "IconName (CFBundleIconName): ${ICON:-<missing>}"
+          if [ -z "${ICON:-}" ]; then
+            echo "❌ Falta CFBundleIconName en Info.plist. Revisa <MauiIcon> y/o Info.plist."; exit 1;
+          fi
 
       # 11) Subir a TestFlight (altool robusto con validación de clave)
       - name: Upload to TestFlight
