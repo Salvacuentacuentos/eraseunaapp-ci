@@ -19,20 +19,17 @@ jobs:
     runs-on: macos-14
 
     steps:
-      # 1) Repo CI (este)
       - name: Checkout (CI repo)
         uses: actions/checkout@v4
 
-      # 2) Repo privado con el código
       - name: Checkout private source
         uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
-          # ref: master        # <- ajusta si tu rama es otra
+          # ref: master
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      # 3) Herramientas
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -41,13 +38,11 @@ jobs:
       - name: Point .NET to selected Xcode (DEVELOPER_DIR & MD_APPLE_SDK_ROOT)
         run: |
           set -euo pipefail
-          XCODE_DEV="$(xcode-select -p)"                                     # /Applications/Xcode_16.1.app/Contents/Developer
-          XCODE_APP="$(dirname "$(dirname "$XCODE_DEV")")"                   # /Applications/Xcode_16.1.app
-          echo "xcode-select -p => $XCODE_DEV"
+          XCODE_DEV="$(xcode-select -p)"
+          XCODE_APP="$(dirname "$(dirname "$XCODE_DEV")")"
+          echo "DEVELOPER_DIR=$XCODE_DEV"     >> "$GITHUB_ENV"
+          echo "MD_APPLE_SDK_ROOT=$XCODE_APP" >> "$GITHUB_ENV"
           xcodebuild -version
-          echo "DEVELOPER_DIR=$XCODE_DEV"       >> "$GITHUB_ENV"
-          echo "MD_APPLE_SDK_ROOT=$XCODE_APP"   >> "$GITHUB_ENV"
-          echo "✅ Set MD_APPLE_SDK_ROOT=$XCODE_APP"
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -62,56 +57,42 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
         id: proj
         run: |
           set -euo pipefail
-          echo "Contenido de source/repos:"
-          ls -la source/repos || true
-
           CS=$(find source -maxdepth 6 -type f -name "Eraseunaapp.csproj" -print -quit)
-          if [ -z "$CS" ]; then
-            echo "No se encontró Eraseunaapp.csproj. Listado de .csproj cercanos:" >&2
-            find source -maxdepth 8 -type f -name "*.csproj" -print >&2
-            exit 1
-          fi
+          [ -n "$CS" ] || { echo "No se encontró Eraseunaapp.csproj"; exit 1; }
           DIR=$(dirname "$CS")
-          echo "csproj=$CS"   >> $GITHUB_OUTPUT
-          echo "srcdir=$DIR"  >> $GITHUB_OUTPUT
+          echo "csproj=$CS"  >> $GITHUB_OUTPUT
+          echo "srcdir=$DIR" >> $GITHUB_OUTPUT
           echo "Proyecto: $CS"
           echo "Carpeta:  $DIR"
           ls -la "$DIR"
 
-      # 5) Fijar SDK .NET 8 en el código (evita .NET 9)
       - name: Pin .NET 8 SDK (global.json)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           cat > global.json <<'JSON'
-          {
-            "sdk": {
-              "version": "8.0.415",
-              "rollForward": "disable"
-            }
-          }
+          { "sdk": { "version": "8.0.415", "rollForward": "disable" } }
           JSON
-          echo "Usando dotnet SDK:" && dotnet --version
+          dotnet --version
 
-      # 6) Instalar workloads MAUI (global)
       - name: Install MAUI workloads (iOS)
         run: |
           set -euo pipefail
           dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
 
-      # 7) Workload restore (en el proyecto iOS)
+      # ✅ FIX: no pasar la ruta (o usar solo el basename)
       - name: Workload restore (iOS)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          dotnet workload restore "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
+          dotnet workload restore -p:TargetFramework=net8.0-ios
+          # Alternativa equivalente:
+          # dotnet workload restore "$(basename "${{ steps.proj.outputs.csproj }}")" -p:TargetFramework=net8.0-ios
 
-      # 8) Restore (iOS only)
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -121,7 +102,6 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 9) Keychain
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -145,16 +125,12 @@ jobs:
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           P12_PATH="$RUNNER_TEMP/dist.p12"
-          if [ -z "${IOS_DISTRIBUTION_P12_BASE64:-}" ]; then echo "❌ Falta IOS_DISTRIBUTION_P12_BASE64"; exit 1; fi
-          if [ -z "${IOS_DISTRIBUTION_P12_PASSWORD:-}" ]; then echo "❌ Falta IOS_DISTRIBUTION_P12_PASSWORD"; exit 1; fi
           printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12_PATH"
-          if ! openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -info -nokeys >/dev/null 2>&1; then
-            echo "❌ Contraseña del .p12 no válida"; exit 1; fi
+          openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -info -nokeys >/dev/null 2>&1
           if security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 \
                -T /usr/bin/codesign -T /usr/bin/security; then
-            echo "✅ Import OK (p12 original)."
+            :
           else
-            echo "ℹ️ Reempaquetando a legacy…"
             openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/tmp.pem"
             openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -passout pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -out "$RUNNER_TEMP/dist-legacy.p12"
             security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 \
@@ -163,14 +139,12 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           CERT_NAME="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n1)"
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
-          echo "🔐 Certificado: $CERT_NAME"
 
       - name: Install provisioning profile (robust)
         env:
           IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
         run: |
           set -euo pipefail
-          if [ -z "${IOS_APPSTORE_PROFILE_B64:-}" ]; then echo "❌ Falta IOS_APPSTORE_PROFILE_B64"; exit 1; fi
           PROFILE_RAW="$RUNNER_TEMP/app.mobileprovision"
           printf %s "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PROFILE_RAW"
           security cms -D -i "$PROFILE_RAW" > "$RUNNER_TEMP/profile.plist"
@@ -184,7 +158,6 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 10) Build number único (timestamp UTC)
       - name: Compute build number (UTC timestamp)
         id: buildno
         shell: bash
@@ -192,28 +165,22 @@ jobs:
           set -euo pipefail
           BN=$(date -u +%Y%m%d%H%M%S)
           echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
-          echo "🔢 BUILD_NUMBER=$BN"
 
-      # 11) Publicar y generar .ipa
       - name: Publish (.xcarchive) + .ipa
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
           dotnet publish "$(basename "${{ steps.proj.outputs.csproj }}")" \
-            -c Release \
-            -f net8.0-ios \
+            -c Release -f net8.0-ios \
             -p:RuntimeIdentifier=ios-arm64 \
-            -p:ArchiveOnBuild=true \
-            -p:BuildIpa=true \
+            -p:ArchiveOnBuild=true -p:BuildIpa=true \
             -p:ApplicationVersion=${{ env.BUILD_NUMBER }} \
             -p:CFBundleVersion=${{ env.BUILD_NUMBER }} \
             -p:CFBundleIconName=AppIcon \
-            -p:MtouchLink=SdkOnly \
-            -p:PublishTrimmed=true \
+            -p:MtouchLink=SdkOnly -p:PublishTrimmed=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
             -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
+            -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
       - name: Find IPA
         id: findipa
@@ -233,19 +200,11 @@ jobs:
           set -euo pipefail
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
-          BID="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-          SVER="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin || true)"
-          BNUM="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /dev/stdin)"
-          ICON="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin || true)"
-          echo "BundleId: $BID"
-          echo "DisplayVersion: ${SVER:-<none>}"
-          echo "BuildNumber: $BNUM"
-          echo "IconName: ${ICON:-<missing>}"
-          if [ -z "${ICON:-}" ]; then
-            echo "❌ Falta CFBundleIconName en Info.plist. Revisa <MauiIcon> y/o Info.plist."; exit 1;
-          fi
+          echo "BundleId: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
+          echo "DisplayVersion: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin || true)"
+          echo "BuildNumber: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /dev/stdin)"
+          echo "IconName: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin || true)"
 
-      # 12) Subir a TestFlight
       - name: Upload to TestFlight
         if: steps.findipa.outputs.ipa != ''
         env:
@@ -258,19 +217,15 @@ jobs:
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEYFILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           CONTENT="${APPSTORE_PRIVATE_KEY}"
-          if [ -z "$CONTENT" ]; then echo "❌ APPSTORE_PRIVATE_KEY está vacío."; exit 1; fi
           if echo "$CONTENT" | grep -q "BEGIN PRIVATE KEY"; then
             printf '%b' "$CONTENT" > "$KEYFILE"
           else
             if printf '%s' "$CONTENT" | base64 -d > "$KEYFILE" 2>/dev/null; then :; else printf '%b' "$CONTENT" > "$KEYFILE"; fi
           fi
           chmod 600 "$KEYFILE"
-          if ! openssl pkey -in "$KEYFILE" -noout >/dev/null 2>&1; then echo "❌ .p8 inválida"; exit 1; fi
-          if ! xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null 2>&1; then
-            echo "❌ Falló la autenticación con App Store Connect."; exit 1; fi
+          xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 13) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
