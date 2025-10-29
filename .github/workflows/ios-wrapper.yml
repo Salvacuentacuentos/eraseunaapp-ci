@@ -224,7 +224,17 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 9) Publicar y generar .ipa
+      # 9) Build number único (timestamp UTC) => evita 409 de versión duplicada
+      - name: Compute build number (UTC timestamp)
+        id: buildno
+        shell: bash
+        run: |
+          set -euo pipefail
+          BN=$(date -u +%Y%m%d%H%M%S)   # 14 dígitos, válido para CFBundleVersion
+          echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
+          echo "🔢 BUILD_NUMBER=$BN"
+
+      # 10) Publicar y generar .ipa
       - name: Publish (.xcarchive) + .ipa
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -235,7 +245,8 @@ jobs:
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
-            -p:CFBundleVersion=${{ github.run_number }} \
+            -p:ApplicationVersion=${{ env.BUILD_NUMBER }} \
+            -p:CFBundleVersion=${{ env.BUILD_NUMBER }} \
             -p:MtouchLink=SdkOnly \
             -p:PublishTrimmed=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
@@ -254,7 +265,7 @@ jobs:
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           test -f "$IPA_PATH" && echo "IPA: $IPA_PATH"
 
-      - name: Inspect IPA bundle id & icon name
+      - name: Inspect IPA bundle id & versions
         if: steps.findipa.outputs.ipa != ''
         shell: bash
         run: |
@@ -262,9 +273,10 @@ jobs:
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           echo "BundleId: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-          echo "IconName: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
+          echo "DisplayVersion (CFBundleShortVersionString): $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /dev/stdin)"
+          echo "BuildNumber (CFBundleVersion): $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /dev/stdin)"
 
-      # 10) Subir a TestFlight (altool robusto con validación de clave)
+      # 11) Subir a TestFlight (altool robusto con validación de clave)
       - name: Upload to TestFlight
         if: steps.findipa.outputs.ipa != ''
         env:
@@ -304,7 +316,7 @@ jobs:
 
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 11) Artefactos
+      # 12) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
