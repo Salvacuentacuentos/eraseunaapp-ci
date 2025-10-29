@@ -68,26 +68,48 @@ jobs:
           dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
 
-      # 4) Detectar automáticamente el csproj
-      - name: Locate project (auto)
-        id: proj
-        run: |
-          set -euo pipefail
-          echo "Contenido de source/repos:"
-          ls -la source/repos || true
+      # 4) Detectar automáticamente el csproj (maneja Eraseunaapp/Eraseunaapp/Eraseunaapp.csproj)
+- name: Locate project (auto)
+  id: proj
+  run: |
+    set -euo pipefail
+    echo "Contenido de source/repos:"
+    ls -la source/repos || true
 
-          CS=$(find source -maxdepth 6 -type f -name "Eraseunaapp.csproj" -print -quit)
-          if [ -z "$CS" ]; then
-            echo "No se encontró Eraseunaapp.csproj. Listado de .csproj cercanos:" >&2
-            find source -maxdepth 8 -type f -name "*.csproj" -print >&2
-            exit 1
-          fi
-          DIR=$(dirname "$CS")
-          echo "csproj=$CS"   >> "$GITHUB_OUTPUT"
-          echo "srcdir=$DIR"  >> "$GITHUB_OUTPUT"
-          echo "Proyecto: $CS"
-          echo "Carpeta:  $DIR"
-          ls -la "$DIR"
+    # Buscar el .csproj más profundo llamado Eraseunaapp.csproj dentro del repo privado
+    CS=$(find source/repos -type f -name "Eraseunaapp.csproj" -print \
+         | awk '{ print length, $0 }' | sort -nr | head -n1 | cut -d" " -f2-)
+
+    # Fallback si no lo encuentra con ese nombre exacto
+    if [ -z "${CS:-}" ]; then
+      CS=$(find source/repos -type f -name "*.csproj" -print \
+           | awk '{ print length, $0 }' | sort -nr | head -n1 | cut -d" " -f2-)
+    fi
+
+    # Caso típico: hay carpeta duplicada "Eraseunaapp/Eraseunaapp"
+    # Si existe una subcarpeta con otro Eraseunaapp.csproj, preferir la más interna
+    if [ -n "${CS:-}" ]; then
+      BASE_DIR="$(dirname "$CS")"
+      if [ -d "$BASE_DIR/Eraseunaapp" ] && [ -f "$BASE_DIR/Eraseunaapp/Eraseunaapp.csproj" ]; then
+        CS="$BASE_DIR/Eraseunaapp/Eraseunaapp.csproj"
+      fi
+    fi
+
+    if [ -z "${CS:-}" ] || [ ! -f "$CS" ]; then
+      echo "No se encontró el .csproj. Listado de proyectos:" >&2
+      find source/repos -type f -name "*.csproj" -print >&2
+      exit 1
+    fi
+
+    DIR=$(dirname "$CS")
+    echo "csproj=$CS"   >> "$GITHUB_OUTPUT"
+    echo "srcdir=$DIR"  >> "$GITHUB_OUTPUT"
+
+    echo "✅ Proyecto: $CS"
+    echo "📁 Carpeta:  $DIR"
+    echo "Listado de la carpeta del proyecto:"
+    ls -la "$DIR"
+
 
       # 5) Fijar SDK .NET 8 en el código (evita usar .NET 9)
       - name: Pin .NET 8 SDK (global.json)
