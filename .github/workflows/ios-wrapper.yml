@@ -103,26 +103,32 @@ jobs:
           JSON
           echo "Usando dotnet SDK:" && dotnet --version
 
-           # 6) Workload restore (iOS) — usar SDK 8 leyendo global.json en srcdir
-      - name: Workload restore (iOS)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet --version     # debe mostrar 8.0.415
-          dotnet workload restore --project "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
+           # 6) Workload restore (iOS) — SDK 8 desde srcdir, csproj absoluto y TFM forzado
+- name: Workload restore (iOS)
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    echo "SRC: $(pwd)"
+    echo "CSPROJ: ${{ steps.proj.outputs.csproj }}"
+    test -f "${{ steps.proj.outputs.csproj }}" || { echo "::error::No existe el csproj en esa ruta"; exit 1; }
+    dotnet --version     # debería ser 8.0.415
+    dotnet workload restore --project "${{ steps.proj.outputs.csproj }}" \
+      -p:TargetFramework=net8.0-ios \
+      -p:TargetFrameworks=net8.0-ios
 
-      # 7) Restore (iOS only) — idem, en srcdir
-      - name: Restore (iOS only)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          dotnet --version     # debe mostrar 8.0.415
-          dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
-            -p:TargetFramework=net8.0-ios \
-            -p:CheckEolTargetFramework=false \
-            -p:SuppressTfmSupportBuildCheck=true \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
+# 7) Restore (iOS only) — idem
+- name: Restore (iOS only)
+  working-directory: ${{ steps.proj.outputs.srcdir }}
+  run: |
+    set -euo pipefail
+    dotnet --version     # debería ser 8.0.415
+    dotnet restore "${{ steps.proj.outputs.csproj }}" \
+      -p:TargetFramework=net8.0-ios \
+      -p:TargetFrameworks=net8.0-ios \
+      -p:CheckEolTargetFramework=false \
+      -p:SuppressTfmSupportBuildCheck=true \
+      -p:TreatWarningsAsErrors=false \
+      -p:NoWarn=NU1605
 
       # 8) Keychain
       - name: Create & unlock keychain
