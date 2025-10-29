@@ -103,21 +103,24 @@ jobs:
           JSON
           echo "Usando dotnet SDK:" && dotnet --version
 
-      # 6) Workload restore (iOS) — usando --project absoluto
+           # 6) Workload restore (iOS) — usar SDK 8 leyendo global.json en srcdir
       - name: Workload restore (iOS)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          PROJ="${{ github.workspace }}/${{ steps.proj.outputs.csproj }}"
-          echo "Restoring workloads for: $PROJ"
-          dotnet workload restore --project "$PROJ" -p:TargetFramework=net8.0-ios
+          dotnet --version     # debe mostrar 8.0.415
+          dotnet workload restore --project "${{ steps.proj.outputs.csproj }}" -p:TargetFramework=net8.0-ios
 
-      # 7) Restore (iOS only) — también con --project absoluto
+      # 7) Restore (iOS only) — idem, en srcdir
       - name: Restore (iOS only)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          PROJ="${{ github.workspace }}/${{ steps.proj.outputs.csproj }}"
-          dotnet restore "$PROJ" \
+          dotnet --version     # debe mostrar 8.0.415
+          dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
             -p:TargetFramework=net8.0-ios \
+            -p:CheckEolTargetFramework=false \
+            -p:SuppressTfmSupportBuildCheck=true \
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
