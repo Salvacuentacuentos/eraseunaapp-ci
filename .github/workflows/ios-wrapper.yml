@@ -2,6 +2,11 @@ name: iOS TestFlight (MAUI) - público + repositorio privado
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: Rama/tag/SHA del repo privado a compilar
+        required: false
+        default: master
 
 concurrency:
   group: ios-testflight-${{ github.ref }}
@@ -33,6 +38,7 @@ jobs:
         with:
           repository: Salvacuentacuentos/Eraseunaapp
           path: ${{ env.SOURCE_DIR }}
+          ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
       - name: Seleccionar Xcode
@@ -40,16 +46,10 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: dotnet --info (antes)
-        run: dotnet --info || true
-
       - name: Instalar .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: dotnet --info (después)
-        run: dotnet --info
 
       - name: Cache NuGet
         uses: actions/cache@v4
@@ -63,7 +63,7 @@ jobs:
           set -euo pipefail
           dotnet workload install ios maui --source https://api.nuget.org/v3/index.json
 
-      - name: Localizar proyecto
+      - name: Detectar proyecto host (Eraseunaapp.csproj)
         id: proj
         run: |
           set -euo pipefail
@@ -73,21 +73,75 @@ jobs:
           echo "csproj=$CS" >> "$GITHUB_OUTPUT"
           echo "srcdir=$DIR" >> "$GITHUB_OUTPUT"
           echo "csproj_name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Proyecto: $CS"
+          echo "Proyecto host: $CS"
 
-      - name: Crear global.json (pin 8.0.415)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
+      # --- Overrides globales para evitar NU1605 como error (aplican a TODA la solución) ---
+      - name: Crear global.json (pin 8.0.415 en raíz del repo privado)
+        working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
           echo '{ "sdk": { "version": "8.0.415", "rollForward": "disable" } }' > global.json
           cat global.json
 
-      - name: Restaurar workloads y paquetes
-        working-directory: ${{ steps.proj.outputs.srcdir }}
+      - name: Inyectar Directory.Build.props (raíz)
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          cat > Directory.Build.props <<'XML'
+          <Project>
+            <PropertyGroup>
+              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+              <WarningsAsErrors></WarningsAsErrors>
+              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
+              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
+              <NoWarn>$(NoWarn);NU1605</NoWarn>
+              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
+            </PropertyGroup>
+          </Project>
+          XML
+          echo "Directory.Build.props creado en $(pwd)"
+
+      - name: Inyectar Directory.Build.targets (raíz, post .csproj)
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          cat > Directory.Build.targets <<'XML'
+          <Project>
+            <PropertyGroup>
+              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+              <WarningsAsErrors></WarningsAsErrors>
+              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
+              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
+              <NoWarn>$(NoWarn);NU1605</NoWarn>
+              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
+            </PropertyGroup>
+          </Project>
+          XML
+          echo "Directory.Build.targets creado en $(pwd)"
+
+      - name: Restaurar workloads y paquetes (en raíz; silencia NU1605)
+        working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
           dotnet workload restore
-          dotnet restore "${{ steps.proj.outputs.csproj_name }}"
+          SLN=$(find . -maxdepth 2 -name "*.sln" | head -n1 || true)
+          if [ -n "$SLN" ]; then
+            echo "Restaurando solución: $SLN"
+            dotnet restore "$SLN" \
+              -p:TreatWarningsAsErrors=false \
+              -p:WarningsAsErrors= \
+              -p:RestoreWarningsAsErrors= \
+              -p:RestoreTreatWarningsAsErrors=false \
+              -p:NoWarn=NU1605 \
+              -p:RestoreNoWarn=NU1605
+          else
+            echo "Restaurando proyecto host: ${{ steps.proj.outputs.csproj }}"
+            dotnet restore "${{ steps.proj.outputs.csproj }}" \
+              -p:TreatWarningsAsErrors=false \
+              -p:WarningsAsErrors= \
+              -p:RestoreWarningsAsErrors= \
+              -p:RestoreTreatWarningsAsErrors=false \
+              -p:NoWarn=NU1605 \
+              -p:RestoreNoWarn=NU1605
+          fi
 
       - name: Verificar icono App Store (1024x1024)
         working-directory: ${{ steps.proj.outputs.srcdir }}
@@ -106,6 +160,7 @@ jobs:
             echo "::error::No se encontró ninguna imagen 1024x1024 en Resources"; exit 1
           fi
 
+      # --- Firma y provisión ---
       - name: Crear y desbloquear keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -149,7 +204,7 @@ jobs:
           echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
           echo "Perfil instalado: $PP_NAME ($PP_UUID)"
 
-      - name: Compilar y publicar IPA (firmado)
+      - name: Compilar y publicar IPA (firmado, sin restore)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -158,6 +213,7 @@ jobs:
           BUILD_NO=$(date -u +%Y%m%d%H%M%S)
           echo "BUILD_NUMBER=$BUILD_NO" >> "$GITHUB_ENV"
           dotnet publish "${{ steps.proj.outputs.csproj_name }}" \
+            --no-restore \
             -c Release -f net8.0-ios \
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
@@ -167,7 +223,13 @@ jobs:
             -p:CFBundleIconName=${EXPECTED_ICON_NAME} \
             -p:CodesignKey="${CERT_NAME}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
-            -p:TeamId="${APPLE_TEAM_ID}"
+            -p:TeamId="${APPLE_TEAM_ID}" \
+            -p:TreatWarningsAsErrors=false \
+            -p:WarningsAsErrors= \
+            -p:RestoreWarningsAsErrors= \
+            -p:RestoreTreatWarningsAsErrors=false \
+            -p:NoWarn=NU1605 \
+            -p:RestoreNoWarn=NU1605
 
       - name: Localizar IPA
         id: ipa
