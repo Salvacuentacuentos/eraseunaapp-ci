@@ -268,6 +268,19 @@ jobs:
           BN=$(date -u +%Y%m%d%H%M%S)   # 14 dígitos, válido para CFBundleVersion
           echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
           echo "🔢 BUILD_NUMBER=$BN"
+          - name: Verify 1024x1024 App Store icon
+          working-directory: ${{ steps.proj.outputs.srcdir }}
+           run: |
+           set -euo pipefail
+           ICON="Resources/AppIcon/appicon.png"
+           test -f "$ICON" || { echo "::error::Falta $ICON"; exit 1; }
+           sips -g pixelWidth -g pixelHeight -g hasAlpha "$ICON"
+           W=$(sips -g pixelWidth "$ICON" | awk '/pixelWidth/ {print $2}')
+           H=$(sips -g pixelHeight "$ICON" | awk '/pixelHeight/ {print $2}')
+           if [ "$W" != "1024" ] || [ "$H" != "1024" ]; then
+           echo "::error::El PNG debe ser exactamente 1024x1024 (actual ${W}x${H})"; exit 1
+           fi
+
 
       # 10) Publicar y generar .ipa
       - name: Publish (.xcarchive) + .ipa
