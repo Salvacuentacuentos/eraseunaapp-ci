@@ -12,12 +12,16 @@ concurrency:
   group: ios-testflight-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   SOURCE_DIR: source/repos
   DOTNET_VERSION: 8.0.415
   XCODE_VERSION: "16.1"
   CONFIGURATION: Release
   RUNTIME_IDENTIFIER: ios-arm64
+  EXPECTED_ICON_NAME: AppIcon
 
 jobs:
   # ---------- PRECHECK LIGERO EN LINUX (sin restore) ----------
@@ -37,12 +41,12 @@ jobs:
           ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Setup .NET (solo para verificar SDK)
+      - name: Setup .NET (solo verificar SDK)
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Pin SDK (global.json en la raíz del repo privado)
+      - name: Pin SDK (global.json en raíz del repo privado)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
@@ -66,7 +70,7 @@ jobs:
   build-and-upload:
     needs: restore-check
     runs-on: macos-14
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       PROJECT_PATH: ${{ needs.restore-check.outputs.project_path }}
     steps:
@@ -161,14 +165,6 @@ jobs:
           XML
 
       # ---------- Firma ----------
-      - name: Decode .p12
-        env:
-          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
-          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
-
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -181,16 +177,49 @@ jobs:
           security default-keychain -s "$KEYCHAIN_PATH"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-      - name: Import .p12 into keychain
+      - name: Import .p12 (robusto) en keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
           IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
         run: |
           set -euo pipefail
-          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          ID="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -E 'Apple Distribution:' | head -n1 | sed -E 's/.*"(.+)".*/\1/')"
-          [ -n "$ID" ] || { echo "::error::No se encontró identidad 'Apple Distribution'"; exit 1; }
+          KC="$KEYCHAIN_PATH"
+          P12="$RUNNER_TEMP/dist.p12"
+          printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
+
+          try_import() {
+            local file="$1"; local pass="${2-}"
+            if [ -z "${pass:-}" ]; then
+              security import "$file" -k "$KC" -A -f pkcs12
+            else
+              security import "$file" -k "$KC" -P "$pass" -A -f pkcs12
+            fi
+          }
+
+          echo "Importando .p12 original…"
+          if try_import "$P12" "${IOS_DISTRIBUTION_P12_PASSWORD:-}"; then
+            echo "Import OK (original)."
+          else
+            echo "Fallo import original. Reempaquetando a PKCS12 legacy…"
+            openssl pkcs12 -in "$P12" -passin pass:"${IOS_DISTRIBUTION_P12_PASSWORD:-}" -nodes -out "$RUNNER_TEMP/tmp.pem" >/dev/null 2>&1 || true
+            openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -out "$RUNNER_TEMP/dist-legacy.p12" -passout pass:"${IOS_DISTRIBUTION_P12_PASSWORD:-}" >/dev/null 2>&1 || true
+
+            echo "Reintentando con reempacado y misma pass…"
+            if try_import "$RUNNER_TEMP/dist-legacy.p12" "${IOS_DISTRIBUTION_P12_PASSWORD:-}"; then
+              echo "Import OK (legacy con pass)."
+            else
+              echo "Último intento: contraseña vacía…"
+              try_import "$P12" "" || { echo "::error::No se pudo importar el .p12 (¿password incorrecta o .p12 corrupto?)"; exit 1; }
+            fi
+          fi
+
+          # Asegura partición de acceso para codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KC"
+
+          # Captura identidad 'Apple Distribution' y TEAMID
+          ID="$(security find-identity -v -p codesigning "$KC" | grep -E 'Apple Distribution:' | head -n1 | sed -E 's/.*"(.+)".*/\1/')"
+          [ -n "$ID" ] || { echo "::error::Importó el .p12 pero no hay identidad 'Apple Distribution'"; exit 1; }
           TEAMID="$(echo "$ID" | sed -n 's/.*(\(.*\)).*/\1/p')"
           echo "CODESIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
           echo "TEAMID=$TEAMID" >> "$GITHUB_ENV"
@@ -208,6 +237,21 @@ jobs:
           cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "PROVISIONING_UUID=$UUID" >> "$GITHUB_ENV"
 
+      # ---------- Checks de icono ----------
+      - name: Verificar icono App Store (1024x1024)
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          set -euo pipefail
+          FOUND=""
+          while IFS= read -r -d '' f; do
+            W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
+            H=$(sips -g pixelHeight "$f" 2>/dev/null | awk '/pixelHeight/ {print $2}')
+            if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then
+              echo "OK 1024x1024: $f"; FOUND="yes"; break
+            fi
+          done < <(find "Resources" -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) -print0 2>/dev/null)
+          [ -n "$FOUND" ] || { echo "::error::No se encontró imagen 1024x1024 en Resources"; exit 1; }
+
       # ---------- BUILD & ARCHIVE ----------
       - name: Publish (genera .xcarchive) + binlog
         id: publish
@@ -216,10 +260,15 @@ jobs:
           set -euo pipefail
           LOG_BIN="$RUNNER_TEMP/build.binlog"
           LOG_TXT="$RUNNER_TEMP/build.txt"
+          BUILD_NO=$(date -u +%Y%m%d%H%M%S)
           set +e
           dotnet publish "${PROJECT_PATH}" \
             -f net8.0-ios -c "${CONFIGURATION}" -r "${RUNTIME_IDENTIFIER}" \
             -p:ArchiveOnBuild=true \
+            -p:BuildIpa=false \
+            -p:ApplicationVersion=$BUILD_NO \
+            -p:CFBundleVersion=$BUILD_NO \
+            -p:CFBundleIconName=${EXPECTED_ICON_NAME} \
             -p:CodesignKeychain="${KEYCHAIN_PATH}" \
             -p:CodesignKey="${CODESIGN_IDENTITY}" \
             -p:CodesignTeamId="${TEAMID}" \
@@ -283,6 +332,21 @@ jobs:
           [ -n "${IPA_FOUND:-}" ] || { echo "::error::No .ipa generated"; exit 1; }
           echo "IPA_PATH=$IPA_FOUND" | tee -a "$GITHUB_ENV"
           echo "ipa=$IPA_FOUND" >> "$GITHUB_OUTPUT"
+
+      - name: Verificar CFBundleIconName dentro de la IPA
+        run: |
+          set -euo pipefail
+          TMP="$RUNNER_TEMP/ipa_unzip"
+          mkdir -p "$TMP"
+          unzip -q "${IPA_PATH}" -d "$TMP"
+          PLIST=$(find "$TMP/Payload" -maxdepth 2 -name "Info.plist" -print -quit)
+          NAME1=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$PLIST" 2>/dev/null || true)
+          NAME2=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$PLIST" 2>/dev/null || true)
+          ICON_NAME="${NAME1:-$NAME2}"
+          echo "CFBundleIconName: ${ICON_NAME:-<vacío>}"
+          if [ -z "$ICON_NAME" ] || [ "$ICON_NAME" != "${EXPECTED_ICON_NAME}" ]; then
+            echo "::error::CFBundleIconName no coincide con '${EXPECTED_ICON_NAME}'"; exit 1
+          fi
 
       - name: Upload to TestFlight (Transporter)
         if: ${{ steps.export.outputs.ipa != '' }}
