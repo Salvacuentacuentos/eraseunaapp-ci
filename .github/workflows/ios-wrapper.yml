@@ -20,7 +20,7 @@ env:
   RUNTIME_IDENTIFIER: ios-arm64
 
 jobs:
-  # ---------- PRECHECK BARATO EN LINUX ----------
+  # ---------- PRECHECK LIGERO EN LINUX (sin restore) ----------
   restore-check:
     runs-on: ubuntu-latest
     outputs:
@@ -37,49 +37,16 @@ jobs:
           ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Setup .NET
+      - name: Setup .NET (solo para verificar SDK)
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Pin SDK (global.json en raíz del repo privado)
+      - name: Pin SDK (global.json en la raíz del repo privado)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
-          cat global.json
-
-      # Overrides globales para que NU1605 no bloquee en restore/build
-      - name: Inyectar Directory.Build.props (raíz)
-        working-directory: ${{ env.SOURCE_DIR }}
-        run: |
-          cat > Directory.Build.props <<'XML'
-          <Project>
-            <PropertyGroup>
-              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <WarningsAsErrors></WarningsAsErrors>
-              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
-              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
-              <NoWarn>$(NoWarn);NU1605</NoWarn>
-              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
-            </PropertyGroup>
-          </Project>
-          XML
-
-      - name: Inyectar Directory.Build.targets (raíz, post .csproj)
-        working-directory: ${{ env.SOURCE_DIR }}
-        run: |
-          cat > Directory.Build.targets <<'XML'
-          <Project>
-            <PropertyGroup>
-              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <WarningsAsErrors></WarningsAsErrors>
-              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
-              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
-              <NoWarn>$(NoWarn);NU1605</NoWarn>
-              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
-            </PropertyGroup>
-          </Project>
-          XML
+          dotnet --info | sed -n '1,30p'
 
       - name: Detectar proyecto host (Eraseunaapp.csproj)
         id: detect
@@ -87,7 +54,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Buscar el host MAUI; NO usar ninguna .sln
           PRJ="$(git ls-files '**/Eraseunaapp.csproj' | head -n1 || true)"
           if [ -z "$PRJ" ]; then
             PRJ="$(git ls-files '**/*.csproj' | xargs grep -l '<UseMaui>true</UseMaui>' | head -n1 || true)"
@@ -96,29 +62,7 @@ jobs:
           echo "project_path=$PRJ" >> "$GITHUB_OUTPUT"
           echo "Usando host: $PRJ"
 
-      - name: Restore iOS (solo el host; sin .sln)
-        working-directory: ${{ env.SOURCE_DIR }}
-        run: |
-          set -euo pipefail
-          RESTORE_LOG="$RUNNER_TEMP/restore.txt"
-          dotnet restore "${{ steps.detect.outputs.project_path }}" \
-            -p:TargetFramework=net8.0-ios \
-            -p:TreatWarningsAsErrors=false \
-            -p:WarningsAsErrors= \
-            -p:RestoreWarningsAsErrors= \
-            -p:RestoreTreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605 \
-            -p:RestoreNoWarn=NU1605 | tee "$RESTORE_LOG"
-
-      - name: Subir log de restore
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-restore-log
-          path: ${{ runner.temp }}/restore.txt
-          if-no-files-found: warn
-
-  # ---------- JOB CARO EN macOS (sólo si pasa el PreCheck) ----------
+  # ---------- BUILD COMPLETO EN macOS ----------
   build-and-upload:
     needs: restore-check
     runs-on: macos-14
@@ -163,7 +107,6 @@ jobs:
           echo "DOTNET_MULTILEVEL_LOOKUP=0" >> "$GITHUB_ENV"
           dotnet --info | sed -n '1,70p'
 
-      # Caches
       - name: Cache NuGet
         uses: actions/cache@v4
         with:
@@ -188,7 +131,7 @@ jobs:
           dotnet workload install maui-ios --skip-manifest-update --ignore-failed-sources
           dotnet workload list
 
-      # Reinyectar overrides (nuevo checkout)
+      # Neutralizar NU1605 (si tus libs mezclan 8.0.92/8.0.100)
       - name: Inyectar Directory.Build.props/targets (raíz)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
