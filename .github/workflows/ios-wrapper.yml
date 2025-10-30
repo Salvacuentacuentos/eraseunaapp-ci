@@ -107,9 +107,9 @@ jobs:
           DIR=$(dirname "$CS")
           NAME=$(basename "$CS")
 
-          echo "csproj=$CS"          >> "$GITHUB_OUTPUT"  # ruta completa (para logs)
-          echo "srcdir=$DIR"         >> "$GITHUB_OUTPUT"  # carpeta del proyecto
-          echo "csproj_name=$NAME"   >> "$GITHUB_OUTPUT"  # solo nombre del archivo
+          echo "csproj=$CS"          >> "$GITHUB_OUTPUT"
+          echo "srcdir=$DIR"         >> "$GITHUB_OUTPUT"
+          echo "csproj_name=$NAME"   >> "$GITHUB_OUTPUT"
 
           echo "✅ Proyecto: $CS"
           echo "📁 Carpeta:  $DIR"
@@ -250,17 +250,22 @@ jobs:
         id: buildno
         run: |
           set -euo pipefail
-          BN="$(date -u +%Y%m%d%H%M%S)"   # 14 dígitos, válido para CFBundleVersion
+          BN="$(date -u +%Y%m%d%H%M%S)"
           printf 'BUILD_NUMBER=%s\n' "$BN" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$BN"
 
-      # 9.1) Verificar que el PNG 1024x1024 existe y es 1024x1024
+      # 9.1) Verificar que el PNG 1024x1024 existe (AppIcon o Applicon)
       - name: Verify 1024x1024 App Store icon
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          ICON="Resources/AppIcon/appicon.png"
-          test -f "$ICON" || { echo "::error::Falta $ICON"; exit 1; }
+          CANDIDATES=("Resources/AppIcon/appicon.png" "Resources/Applicon/appicon.png")
+          ICON=""
+          for P in "${CANDIDATES[@]}"; do
+            if [ -f "$P" ]; then ICON="$P"; break; fi
+          done
+          [ -n "$ICON" ] || { echo "::error::No se encontró appicon.png en Resources/AppIcon ni en Resources/Applicon"; exit 1; }
+          echo "ICON=$ICON"
           sips -g pixelWidth -g pixelHeight -g hasAlpha "$ICON"
           W=$(sips -g pixelWidth "$ICON" | awk '/pixelWidth/ {print $2}')
           H=$(sips -g pixelHeight "$ICON" | awk '/pixelHeight/ {print $2}')
@@ -289,25 +294,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 10.5) Comprobar que el ios-marketing 1024 está en el asset catalog (Assets.car)
-      - name: Inspect compiled asset catalog (AppIcon 1024)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          ARCH=$(find bin/Release/net8.0-ios/ios-arm64 -type d -name "*.xcarchive" -print -quit)
-          test -d "$ARCH" || { echo "::error::No se encontró .xcarchive"; exit 1; }
-          APP=$(find "$ARCH/Products/Applications" -type d -name "*.app" -print -quit)
-          test -d "$APP" || { echo "::error::No se encontró .app dentro del .xcarchive"; exit 1; }
-          ASSETS="$APP/Assets.car"
-          test -f "$ASSETS" || { echo "::error::No existe Assets.car (asset catalog)"; exit 1; }
-          echo "📦 Analizando Assets.car en: $ASSETS"
-          # Buscar referencias a AppIcon y tamaños (assetutil existe en macOS runners)
-          if /usr/bin/assetutil -I "$ASSETS" | grep -i '"AppIcon"' -A4 | grep -E '1024|marketing|size' ; then
-            echo "✅ AppIcon 1024 (ios-marketing) parece presente."
-          else
-            echo "::error::No se ve AppIcon 1024 en Assets.car (ios-marketing)"; exit 1
-          fi
-
+      # 11) Localizar el IPA primero
       - name: Find IPA
         id: findipa
         run: |
@@ -316,8 +303,28 @@ jobs:
           if [ -z "$IPA_PATH" ]; then
             IPA_PATH="$(find "${{ steps.proj.outputs.srcdir }}/bin/Release/net8.0-ios/ios-arm64" -type f -name "*.ipa" -print -quit)"
           fi
+          [ -n "$IPA_PATH" ] || { echo "::error::No se encontró .ipa"; exit 1; }
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
-          test -f "$IPA_PATH" && echo "IPA: $IPA_PATH"
+          echo "IPA: $IPA_PATH"
+
+      # 11.5) Inspeccionar el asset catalog desde el IPA (Assets.car) y comprobar AppIcon 1024
+      - name: Inspect asset catalog from IPA (AppIcon 1024)
+        if: steps.findipa.outputs.ipa != ''
+        run: |
+          set -euo pipefail
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          TMPDIR="$(mktemp -d)"
+          unzip -q "$IPA" -d "$TMPDIR"
+          APP_DIR="$(find "$TMPDIR/Payload" -type d -name "*.app" -print -quit)"
+          [ -d "$APP_DIR" ] || { echo "::error::No se encontró .app dentro del IPA"; exit 1; }
+          ASSETS="$APP_DIR/Assets.car"
+          [ -f "$ASSETS" ] || { echo "::error::No existe Assets.car dentro del IPA"; exit 1; }
+          echo "📦 Analizando $ASSETS"
+          if /usr/bin/assetutil -I "$ASSETS" | grep -i '"AppIcon"' -A4 | grep -E '1024|marketing|size' ; then
+            echo "✅ AppIcon 1024 (ios-marketing) parece presente."
+          else
+            echo "::error::No se ve AppIcon 1024 en Assets.car (ios-marketing)"; exit 1
+          fi
 
       - name: Inspect IPA bundle id, versions & icon name
         if: steps.findipa.outputs.ipa != ''
@@ -334,10 +341,10 @@ jobs:
           echo "BuildNumber (CFBundleVersion): $BNUM"
           echo "IconName (CFBundleIconName): ${ICON:-<missing>}"
           if [ -z "${ICON:-}" ]; then
-            echo "⚠️  Aviso: falta CFBundleIconName=AppIcon en Info.plist (MAUI suele generarlo si <MauiIcon> existe)."
+            echo "⚠️  Aviso: falta CFBundleIconName=AppIcon en Info.plist."
           fi
 
-      # 11) Subir a TestFlight
+      # 12) Subir a TestFlight
       - name: Upload to TestFlight
         if: steps.findipa.outputs.ipa != ''
         env:
@@ -366,7 +373,7 @@ jobs:
 
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 12) Artefactos
+      # 13) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
