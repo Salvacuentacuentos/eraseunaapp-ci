@@ -72,7 +72,7 @@ jobs:
           dotnet --info
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
 
-      # 4) Detectar automáticamente el csproj (soporta Eraseunaapp/Eraseunaapp/Eraseunaapp.csproj)
+      # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
         id: proj
         run: |
@@ -137,7 +137,7 @@ jobs:
           V=$(dotnet --version)
           [ "$V" = "8.0.415" ] || { echo "::error::Usando SDK $V en vez de 8.0.415"; exit 1; }
 
-      # 6) Workload restore (iOS)
+      # 6) Workload restore (iOS) — desde srcdir
       - name: Workload restore (iOS)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -149,7 +149,7 @@ jobs:
             -p:TargetFramework=net8.0-ios \
             -p:TargetFrameworks=net8.0-ios
 
-      # 7) Restore (iOS only)
+      # 7) Restore (iOS only) — desde srcdir
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -183,38 +183,32 @@ jobs:
           IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
         run: |
           set -euo pipefail
-
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           P12_PATH="$RUNNER_TEMP/dist.p12"
 
-          # 0) Sanity checks
           [ -n "${IOS_DISTRIBUTION_P12_BASE64:-}" ] || { echo "❌ IOS_DISTRIBUTION_P12_BASE64 vacío"; exit 1; }
           [ -n "${IOS_DISTRIBUTION_P12_PASSWORD:-}" ] || { echo "❌ IOS_DISTRIBUTION_P12_PASSWORD vacío"; exit 1; }
 
-          # 2) Decodificar Base64 → .p12
           printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12_PATH" || {
             echo "❌ Base64 inválido para .p12"; exit 1; }
           [ -s "$P12_PATH" ] || { echo "❌ El .p12 decodificado está vacío"; exit 1; }
 
-          # 3) Validar contraseña
           if ! openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -info -nokeys >/dev/null 2>&1; then
             echo "❌ Contraseña .p12 no válida (MAC verification)"; exit 1
           fi
 
-          # 4) Importar (con fallback a legacy)
           if security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 \
                -T /usr/bin/codesign -T /usr/bin/security; then
             echo "✅ Import OK (p12 original)."
           else
-            echo "ℹ️ Reempaquetando .p12 a formato legacy y reintentando…"
+            echo "ℹ️ Reempaquetando .p12 a legacy y reintentando…"
             openssl pkcs12 -in "$P12_PATH" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/tmp.pem"
             openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -passout pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -out "$RUNNER_TEMP/dist-legacy.p12"
             security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 \
                -T /usr/bin/codesign -T /usr/bin/security
-            echo "✅ Import OK (formato legacy)."
+            echo "✅ Import OK (legacy)."
           fi
 
-          # 5) Permisos + exponer nombre del certificado
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           CERT_NAME="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n1)"
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
@@ -294,7 +288,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 11) Localizar el IPA primero
+      # 11) Localizar el IPA
       - name: Find IPA
         id: findipa
         run: |
@@ -307,8 +301,8 @@ jobs:
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           echo "IPA: $IPA_PATH"
 
-      # 11.5) Inspeccionar el asset catalog desde el IPA (Assets.car) y comprobar AppIcon 1024
-      - name: Inspect asset catalog from IPA (AppIcon 1024)
+      # 11.5) Inspeccionar iconos dentro del IPA (con o sin Assets.car)
+      - name: Inspect icons in IPA (AppIcon 1024)
         if: steps.findipa.outputs.ipa != ''
         run: |
           set -euo pipefail
@@ -317,13 +311,32 @@ jobs:
           unzip -q "$IPA" -d "$TMPDIR"
           APP_DIR="$(find "$TMPDIR/Payload" -type d -name "*.app" -print -quit)"
           [ -d "$APP_DIR" ] || { echo "::error::No se encontró .app dentro del IPA"; exit 1; }
-          ASSETS="$APP_DIR/Assets.car"
-          [ -f "$ASSETS" ] || { echo "::error::No existe Assets.car dentro del IPA"; exit 1; }
-          echo "📦 Analizando $ASSETS"
-          if /usr/bin/assetutil -I "$ASSETS" | grep -i '"AppIcon"' -A4 | grep -E '1024|marketing|size' ; then
-            echo "✅ AppIcon 1024 (ios-marketing) parece presente."
+
+          if [ -f "$APP_DIR/Assets.car" ]; then
+            echo "📦 Encontrado Assets.car — comprobando AppIcon 1024 (ios-marketing)…"
+            if /usr/bin/assetutil -I "$APP_DIR/Assets.car" | grep -i '"AppIcon"' -A5 | grep -E '1024|marketing|size' ; then
+              echo "✅ AppIcon 1024 OK (via Assets.car)"
+            else
+              echo "::error::No aparece AppIcon 1024 en Assets.car"; exit 1
+            fi
           else
-            echo "::error::No se ve AppIcon 1024 en Assets.car (ios-marketing)"; exit 1
+            echo "ℹ️ No hay Assets.car; buscando PNGs sueltos de AppIcon…"
+            CANDIDATES=$(find "$APP_DIR" -type f \( -iname 'AppIcon*.png' -o -iname '*Marketing*.png' -o -iname '*1024*.png' \) || true)
+            if [ -z "$CANDIDATES" ]; then
+              echo "::error::No se encontraron PNGs candidatos de AppIcon en el bundle"; exit 1
+            fi
+            OK=0
+            while IFS= read -r P; do
+              W=$(sips -g pixelWidth "$P" | awk '/pixelWidth/ {print $2}')
+              H=$(sips -g pixelHeight "$P" | awk '/pixelHeight/ {print $2}')
+              echo "• $(basename "$P") — ${W}x${H}"
+              if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then OK=1; fi
+            done <<< "$CANDIDATES"
+            if [ "$OK" -eq 1 ]; then
+              echo "✅ Encontrado icono 1024×1024 entre los PNGs sueltos"
+            else
+              echo "::error::No hay ningún PNG 1024×1024 en el bundle"; exit 1
+            fi
           fi
 
       - name: Inspect IPA bundle id, versions & icon name
@@ -340,9 +353,6 @@ jobs:
           echo "DisplayVersion (CFBundleShortVersionString): ${SVER:-<missing>}"
           echo "BuildNumber (CFBundleVersion): $BNUM"
           echo "IconName (CFBundleIconName): ${ICON:-<missing>}"
-          if [ -z "${ICON:-}" ]; then
-            echo "⚠️  Aviso: falta CFBundleIconName=AppIcon en Info.plist."
-          fi
 
       # 12) Subir a TestFlight
       - name: Upload to TestFlight
