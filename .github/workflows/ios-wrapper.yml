@@ -135,7 +135,7 @@ jobs:
           dotnet workload install maui-ios --skip-manifest-update --ignore-failed-sources
           dotnet workload list
 
-      # Neutralizar NU1605 (si tus libs mezclan 8.0.92/8.0.100)
+      # Neutralizar NU1605 (si hay mezcla 8.0.92/8.0.100)
       - name: Inyectar Directory.Build.props/targets (raíz)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
@@ -237,12 +237,13 @@ jobs:
           cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "PROVISIONING_UUID=$UUID" >> "$GITHUB_ENV"
 
-           - name: Verificar icono App Store (1024x1024, PNG)
+      # ---------- Checks de icono ----------
+      - name: Verificar icono App Store (1024x1024, PNG)
+        working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
           PROJ_DIR="$(cd "$(dirname "$PROJECT_PATH")" && pwd)"
 
-          # Candidatos típicos de MAUI (prioridad)
           CANDIDATES=()
           CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/appicon.png" )
           CANDIDATES+=( "$PROJ_DIR/Resources/appicon.png" )
@@ -257,7 +258,6 @@ jobs:
             if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
           done
 
-          # Fallback: escanear cualquier PNG 1024x1024 bajo Resources del proyecto
           if [ -z "$FOUND" ]; then
             while IFS= read -r -d '' f; do
               W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
@@ -269,7 +269,6 @@ jobs:
 
           [ -n "$FOUND" ] || { echo "::error::No se encontró PNG 1024x1024 en $PROJ_DIR/Resources"; exit 1; }
           echo "OK 1024x1024: $FOUND"
-
 
       # ---------- BUILD & ARCHIVE ----------
       - name: Publish (genera .xcarchive) + binlog
