@@ -237,20 +237,39 @@ jobs:
           cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "PROVISIONING_UUID=$UUID" >> "$GITHUB_ENV"
 
-      # ---------- Checks de icono ----------
-      - name: Verificar icono App Store (1024x1024)
-        working-directory: ${{ env.SOURCE_DIR }}
+           - name: Verificar icono App Store (1024x1024, PNG)
         run: |
           set -euo pipefail
+          PROJ_DIR="$(cd "$(dirname "$PROJECT_PATH")" && pwd)"
+
+          # Candidatos típicos de MAUI (prioridad)
+          CANDIDATES=()
+          CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/appicon.png" )
+          CANDIDATES+=( "$PROJ_DIR/Resources/appicon.png" )
+          CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/AppIcon.png" )
+
           FOUND=""
-          while IFS= read -r -d '' f; do
+          for f in "${CANDIDATES[@]}"; do
+            [ -f "$f" ] || continue
             W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
             H=$(sips -g pixelHeight "$f" 2>/dev/null | awk '/pixelHeight/ {print $2}')
-            if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then
-              echo "OK 1024x1024: $f"; FOUND="yes"; break
-            fi
-          done < <(find "Resources" -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) -print0 2>/dev/null)
-          [ -n "$FOUND" ] || { echo "::error::No se encontró imagen 1024x1024 en Resources"; exit 1; }
+            echo "Probe: $f -> ${W}x${H}"
+            if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
+          done
+
+          # Fallback: escanear cualquier PNG 1024x1024 bajo Resources del proyecto
+          if [ -z "$FOUND" ]; then
+            while IFS= read -r -d '' f; do
+              W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
+              H=$(sips -g pixelHeight "$f" 2>/dev/null | awk '/pixelHeight/ {print $2}')
+              echo "Scan: $f -> ${W}x${H}"
+              if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
+            done < <(find "$PROJ_DIR/Resources" -type f -iname '*.png' -print0 2>/dev/null)
+          fi
+
+          [ -n "$FOUND" ] || { echo "::error::No se encontró PNG 1024x1024 en $PROJ_DIR/Resources"; exit 1; }
+          echo "OK 1024x1024: $FOUND"
+
 
       # ---------- BUILD & ARCHIVE ----------
       - name: Publish (genera .xcarchive) + binlog
