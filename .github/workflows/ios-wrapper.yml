@@ -129,10 +129,14 @@ jobs:
           key: ${{ runner.os }}-dotnetpacks-${{ env.DOTNET_VERSION }}
           restore-keys: ${{ runner.os }}-dotnetpacks-
 
-      - name: Install MAUI workload (iOS only)
+      # ⬇️ ARREGLO: instalar meta-workload MAUI + iOS + maccatalyst y luego workload restore
+      - name: Install MAUI workloads (MAUI + iOS + MacCatalyst) y restore
+        working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
-          dotnet workload install maui-ios --skip-manifest-update --ignore-failed-sources
+          dotnet workload update || true
+          dotnet workload install maui maui-ios maui-maccatalyst --source https://api.nuget.org/v3/index.json
+          dotnet workload restore
           dotnet workload list
 
       # Neutralizar NU1605 (si hay mezcla 8.0.92/8.0.100)
@@ -214,10 +218,8 @@ jobs:
             fi
           fi
 
-          # Asegura partición de acceso para codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KC"
 
-          # Captura identidad 'Apple Distribution' y TEAMID
           ID="$(security find-identity -v -p codesigning "$KC" | grep -E 'Apple Distribution:' | head -n1 | sed -E 's/.*"(.+)".*/\1/')"
           [ -n "$ID" ] || { echo "::error::Importó el .p12 pero no hay identidad 'Apple Distribution'"; exit 1; }
           TEAMID="$(echo "$ID" | sed -n 's/.*(\(.*\)).*/\1/p')"
@@ -237,18 +239,16 @@ jobs:
           cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "PROVISIONING_UUID=$UUID" >> "$GITHUB_ENV"
 
-      # ---------- Checks de icono ----------
+      # ---------- Check icono ----------
       - name: Verificar icono App Store (1024x1024, PNG)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
           PROJ_DIR="$(cd "$(dirname "$PROJECT_PATH")" && pwd)"
-
           CANDIDATES=()
           CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/appicon.png" )
           CANDIDATES+=( "$PROJ_DIR/Resources/appicon.png" )
           CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/AppIcon.png" )
-
           FOUND=""
           for f in "${CANDIDATES[@]}"; do
             [ -f "$f" ] || continue
@@ -257,7 +257,6 @@ jobs:
             echo "Probe: $f -> ${W}x${H}"
             if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
           done
-
           if [ -z "$FOUND" ]; then
             while IFS= read -r -d '' f; do
               W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
@@ -266,7 +265,6 @@ jobs:
               if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
             done < <(find "$PROJ_DIR/Resources" -type f -iname '*.png' -print0 2>/dev/null)
           fi
-
           [ -n "$FOUND" ] || { echo "::error::No se encontró PNG 1024x1024 en $PROJ_DIR/Resources"; exit 1; }
           echo "OK 1024x1024: $FOUND"
 
@@ -363,7 +361,7 @@ jobs:
           ICON_NAME="${NAME1:-$NAME2}"
           echo "CFBundleIconName: ${ICON_NAME:-<vacío>}"
           if [ -z "$ICON_NAME" ] || [ "$ICON_NAME" != "${EXPECTED_ICON_NAME}" ]; then
-            echo "::error::CFBundleIconName no coincide con '${EXPECTED_ICON_NAME}'"; exit 1
+            echo "::error::CFBundleIconName no coincide con '${EXPECTED_ICON_NAME}'"; exit 1;
           fi
 
       - name: Upload to TestFlight (Transporter)
