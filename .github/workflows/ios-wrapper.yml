@@ -1,4 +1,4 @@
-name: iOS TestFlight (MAUI) — público ➜ privado
+name: iOS TestFlight (MAUI) - publico a privado
 
 on:
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Point .NET to selected Xcode (DEVELOPER_DIR & MD_APPLE_SDK_ROOT)
+      - name: Point .NET to selected Xcode
         run: |
           set -euo pipefail
           XCODE_DEV="$(xcode-select -p)"
@@ -57,8 +57,7 @@ jobs:
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+          restore-keys: ${{ runner.os }}-nuget-
 
       - name: Install MAUI workloads (iOS)
         run: |
@@ -118,16 +117,14 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # Diagnóstico previo: ¿MAUI generó el catálogo con AppIcon.appiconset?
       - name: Dump MAUI-generated xcassets (obj)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
-          echo "🔎 Buscando AppIcon.appiconset y Contents.json en obj/…"
           find obj -type d -name "AppIcon.appiconset" -print || true
           find obj -type f -name "Contents.json" -path "*AppIcon.appiconset/*" -print || true
 
-      # Asegura que el PNG base 1024 exista en el repo
+      # OJO: si tu carpeta real es "Resources/Applicon/appicon.png" ajusta la ruta aquí
       - name: Verify 1024x1024 App Store icon
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -140,7 +137,8 @@ jobs:
           [ "$W" = "1024" ] && [ "$H" = "1024" ] || { echo "::error::Debe ser 1024x1024"; exit 1; }
 
       - name: Create & unlock keychain
-        env: { KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }} }
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
@@ -179,7 +177,8 @@ jobs:
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
 
       - name: Install provisioning profile (robust)
-        env: { IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }} }
+        env:
+          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
         run: |
           set -euo pipefail
           PROFILE_RAW="$RUNNER_TEMP/app.mobileprovision"
@@ -228,7 +227,6 @@ jobs:
           echo "ipa=$IPA_PATH" >> $GITHUB_OUTPUT
           echo "IPA: $IPA_PATH"
 
-      # INSPECCIÓN: dentro del IPA, comprueba Assets.car o PNGs 1024
       - name: Inspect icons in IPA (AppIcon 1024)
         if: steps.findipa.outputs.ipa != ''
         run: |
@@ -239,27 +237,23 @@ jobs:
           APP_DIR="$(find "$TMPDIR/Payload" -type d -name "*.app" -print -quit)"
           [ -d "$APP_DIR" ] || { echo "::error::No se encontró .app dentro del IPA"; exit 1; }
           if [ -f "$APP_DIR/Assets.car" ]; then
-            echo "📦 Assets.car encontrado. Buscando AppIcon 1024 (ios-marketing)…"
-            if /usr/bin/assetutil -I "$APP_DIR/Assets.car" | grep -i '"AppIcon"' -A5 | grep -E '1024|marketing|size' ; then
-              echo "✅ AppIcon 1024 OK (via Assets.car)"
-            else
-              echo "::error::No aparece AppIcon 1024 en Assets.car"; exit 1
-            fi
+            echo "Assets.car OK; buscando AppIcon 1024…"
+            /usr/bin/assetutil -I "$APP_DIR/Assets.car" | grep -i '"AppIcon"' -A5 | grep -E '1024|marketing|size' || {
+              echo "::error::No aparece AppIcon 1024 en Assets.car"; exit 1; }
           else
-            echo "ℹ️ No hay Assets.car; buscando PNGs sueltos…"
-            CANDIDATES=$(find "$APP_DIR" -type f \( -iname 'AppIcon*.png' -o -iname '*Marketing*.png' -o -iname '*1024*.png' \) || true)
-            if [ -z "$CANDIDATES" ]; then
-              echo "::error::No se encontraron PNGs candidatos de AppIcon en el bundle"; exit 1
-            fi
+            echo "No hay Assets.car; comprobando PNGs sueltos…"
+            CAND=$(find "$APP_DIR" -type f \( -iname 'AppIcon*.png' -o -iname '*Marketing*.png' -o -iname '*1024*.png' \) || true)
+            [ -n "$CAND" ] || { echo "::error::No hay PNGs de AppIcon en el bundle"; exit 1; }
             OK=0
             while IFS= read -r P; do
               W=$(sips -g pixelWidth  "$P" | awk '/pixelWidth/ {print $2}')
               H=$(sips -g pixelHeight "$P" | awk '/pixelHeight/ {print $2}')
-              echo "• $(basename "$P") — ${W}x${H}"
-              if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then OK=1; fi
-            done <<< "$CANDIDATES"
-            [ "$OK" -eq 1 ] && echo "✅ Encontrado icono 1024×1024 entre los PNGs sueltos" || { echo "::error::No hay PNG 1024×1024"; exit 1; }
+              echo "PNG $(basename "$P") -> ${W}x${H}"
+              [ "$W" = "1024" ] && [ "$H" = "1024" ] && OK=1
+            done <<< "$CAND"
+            [ "$OK" -eq 1 ] || { echo "::error::No hay PNG 1024x1024"; exit 1; }
           fi
+          echo "✅ Iconos OK"
 
       - name: Inspect IPA bundle id, versions & icon name
         if: steps.findipa.outputs.ipa != ''
