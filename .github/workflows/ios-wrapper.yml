@@ -1,4 +1,4 @@
-name: iOS TestFlight (MAUI) - público + repositorio privado
+name: iOS TestFlight (MAUI) — iOS only + PreCheck Linux
 
 on:
   workflow_dispatch:
@@ -12,28 +12,24 @@ concurrency:
   group: ios-testflight-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
-defaults:
-  run:
-    shell: bash
-
 env:
+  SOURCE_DIR: source/repos
   DOTNET_VERSION: 8.0.415
   XCODE_VERSION: "16.1"
-  SOURCE_DIR: source/repos
-  EXPECTED_ICON_NAME: AppIcon
+  CONFIGURATION: Release
+  RUNTIME_IDENTIFIER: ios-arm64
 
 jobs:
-  build-and-upload:
-    runs-on: macos-14
-
+  # ---------- PRECHECK BARATO EN LINUX ----------
+  restore-check:
+    runs-on: ubuntu-latest
+    outputs:
+      project_path: ${{ steps.detect.outputs.project_path }}
     steps:
-      - name: Checkout CI repo
+      - name: Checkout (repo CI)
         uses: actions/checkout@v4
 
-      - name: Checkout código privado
+      - name: Checkout repo privado (código)
         uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
@@ -41,48 +37,18 @@ jobs:
           ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Seleccionar Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: ${{ env.XCODE_VERSION }}
-
-      - name: Instalar .NET SDK
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Cache NuGet
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj') }}
-          restore-keys: ${{ runner.os }}-nuget-
-
-      - name: Instalar workloads MAUI+iOS
-        run: |
-          set -euo pipefail
-          dotnet workload install ios maui --source https://api.nuget.org/v3/index.json
-
-      - name: Detectar proyecto host (Eraseunaapp.csproj)
-        id: proj
-        run: |
-          set -euo pipefail
-          CS=$(find "${SOURCE_DIR}" -type f -name "Eraseunaapp.csproj" | head -n1)
-          if [ -z "$CS" ]; then echo "::error::No se encontró Eraseunaapp.csproj"; exit 1; fi
-          DIR=$(dirname "$CS"); NAME=$(basename "$CS")
-          echo "csproj=$CS" >> "$GITHUB_OUTPUT"
-          echo "srcdir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "csproj_name=$NAME" >> "$GITHUB_OUTPUT"
-          echo "Proyecto host: $CS"
-
-      # --- Overrides globales para evitar NU1605 como error (aplican a TODA la solución) ---
-      - name: Crear global.json (pin 8.0.415 en raíz del repo privado)
+      - name: Pin SDK (global.json en raíz del repo privado)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
-          set -euo pipefail
-          echo '{ "sdk": { "version": "8.0.415", "rollForward": "disable" } }' > global.json
+          echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
           cat global.json
 
+      # Overrides globales para que NU1605 no bloquee en restore/build
       - name: Inyectar Directory.Build.props (raíz)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
@@ -98,7 +64,6 @@ jobs:
             </PropertyGroup>
           </Project>
           XML
-          echo "Directory.Build.props creado en $(pwd)"
 
       - name: Inyectar Directory.Build.targets (raíz, post .csproj)
         working-directory: ${{ env.SOURCE_DIR }}
@@ -115,191 +80,291 @@ jobs:
             </PropertyGroup>
           </Project>
           XML
-          echo "Directory.Build.targets creado en $(pwd)"
 
-      - name: Restaurar workloads y paquetes (en raíz; silencia NU1605)
+      - name: Detectar proyecto host (Eraseunaapp.csproj)
+        id: detect
+        working-directory: ${{ env.SOURCE_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Buscar el host MAUI; NO usar ninguna .sln
+          PRJ="$(git ls-files '**/Eraseunaapp.csproj' | head -n1 || true)"
+          if [ -z "$PRJ" ]; then
+            PRJ="$(git ls-files '**/*.csproj' | xargs grep -l '<UseMaui>true</UseMaui>' | head -n1 || true)"
+          fi
+          [ -n "$PRJ" ] || { echo "::error::No se encontró .csproj MAUI (Eraseunaapp)"; exit 1; }
+          echo "project_path=$PRJ" >> "$GITHUB_OUTPUT"
+          echo "Usando host: $PRJ"
+
+      - name: Restore iOS (solo el host; sin .sln)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
-          dotnet workload restore
-          SLN=$(find . -maxdepth 2 -name "*.sln" | head -n1 || true)
-          if [ -n "$SLN" ]; then
-            echo "Restaurando solución: $SLN"
-            dotnet restore "$SLN" \
-              -p:TreatWarningsAsErrors=false \
-              -p:WarningsAsErrors= \
-              -p:RestoreWarningsAsErrors= \
-              -p:RestoreTreatWarningsAsErrors=false \
-              -p:NoWarn=NU1605 \
-              -p:RestoreNoWarn=NU1605
-          else
-            echo "Restaurando proyecto host: ${{ steps.proj.outputs.csproj }}"
-            dotnet restore "${{ steps.proj.outputs.csproj }}" \
-              -p:TreatWarningsAsErrors=false \
-              -p:WarningsAsErrors= \
-              -p:RestoreWarningsAsErrors= \
-              -p:RestoreTreatWarningsAsErrors=false \
-              -p:NoWarn=NU1605 \
-              -p:RestoreNoWarn=NU1605
-          fi
-
-      - name: Verificar icono App Store (1024x1024)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          FOUND=""
-          while IFS= read -r -d '' f; do
-            W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
-            H=$(sips -g pixelHeight "$f" 2>/dev/null | awk '/pixelHeight/ {print $2}')
-            if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then
-              echo "OK: Icono 1024x1024 encontrado en: $f"
-              FOUND="yes"; break
-            fi
-          done < <(find "Resources" -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) -print0 2>/dev/null)
-          if [ -z "$FOUND" ]; then
-            echo "::error::No se encontró ninguna imagen 1024x1024 en Resources"; exit 1
-          fi
-
-      # --- Firma y provisión ---
-      - name: Crear y desbloquear keychain
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          KC="$RUNNER_TEMP/build.keychain-db"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
-          security set-keychain-settings -lut 21600 "$KC"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
-          security list-keychains -s "$KC" $(security list-keychains -d user | sed 's/[""]//g')
-          security default-keychain -s "$KC"
-
-      - name: Importar certificado (.p12)
-        env:
-          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
-          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          KC="$RUNNER_TEMP/build.keychain-db"
-          CERT_PATH="$RUNNER_TEMP/dist.p12"
-          echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 -d > "$CERT_PATH"
-          security import "$CERT_PATH" -k "$KC" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12
-          security find-identity -v -p codesigning "$KC" || true
-          CERT_NAME=$(security find-identity -v -p codesigning "$KC" | awk -F '"' '/Apple Distribution/ {print $2; exit}')
-          if [ -z "$CERT_NAME" ]; then echo "::error::No se encontró identidad Apple Distribution en el llavero"; exit 1; fi
-          echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
-
-      - name: Instalar provisioning profile
-        env:
-          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
-        run: |
-          set -euo pipefail
-          PROFILE_RAW="$RUNNER_TEMP/profile.mobileprovision"
-          echo "$IOS_APPSTORE_PROFILE_B64" | base64 -d > "$PROFILE_RAW"
-          security cms -D -i "$PROFILE_RAW" > "$RUNNER_TEMP/profile.plist"
-          PP_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
-          PP_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
-          echo "PP_UUID=$PP_UUID" >> "$GITHUB_ENV"
-          echo "PP_NAME=$PP_NAME" >> "$GITHUB_ENV"
-          echo "Perfil instalado: $PP_NAME ($PP_UUID)"
-
-      - name: Compilar y publicar IPA (firmado, sin restore)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          BUILD_NO=$(date -u +%Y%m%d%H%M%S)
-          echo "BUILD_NUMBER=$BUILD_NO" >> "$GITHUB_ENV"
-          dotnet publish "${{ steps.proj.outputs.csproj_name }}" \
-            --no-restore \
-            -c Release -f net8.0-ios \
-            -p:RuntimeIdentifier=ios-arm64 \
-            -p:ArchiveOnBuild=true \
-            -p:BuildIpa=true \
-            -p:ApplicationVersion=$BUILD_NO \
-            -p:CFBundleVersion=$BUILD_NO \
-            -p:CFBundleIconName=${EXPECTED_ICON_NAME} \
-            -p:CodesignKey="${CERT_NAME}" \
-            -p:ProvisioningProfileUuid="${PP_UUID}" \
-            -p:TeamId="${APPLE_TEAM_ID}" \
+          RESTORE_LOG="$RUNNER_TEMP/restore.txt"
+          dotnet restore "${{ steps.detect.outputs.project_path }}" \
+            -p:TargetFramework=net8.0-ios \
             -p:TreatWarningsAsErrors=false \
             -p:WarningsAsErrors= \
             -p:RestoreWarningsAsErrors= \
             -p:RestoreTreatWarningsAsErrors=false \
             -p:NoWarn=NU1605 \
-            -p:RestoreNoWarn=NU1605
+            -p:RestoreNoWarn=NU1605 | tee "$RESTORE_LOG"
 
-      - name: Localizar IPA
-        id: ipa
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        run: |
-          set -euo pipefail
-          IPA=$(find "bin" -name "*.ipa" | head -n1)
-          if [ -z "$IPA" ]; then echo "::error::No se encontró .ipa"; exit 1; fi
-          echo "ipa=$IPA" >> "$GITHUB_OUTPUT"
-          echo "IPA encontrada: $IPA"
-
-      - name: Verificar CFBundleIconName dentro de la IPA
-        run: |
-          set -euo pipefail
-          TMP="$RUNNER_TEMP/ipa_unzip"
-          mkdir -p "$TMP"
-          unzip -q "${{ steps.ipa.outputs.ipa }}" -d "$TMP"
-          PLIST=$(find "$TMP/Payload" -maxdepth 2 -name "Info.plist" -print -quit)
-          if [ -z "$PLIST" ]; then echo "::error::No se encontró Info.plist en IPA"; exit 1; fi
-          NAME1=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$PLIST" 2>/dev/null || true)
-          NAME2=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$PLIST" 2>/dev/null || true)
-          ICON_NAME="${NAME1:-$NAME2}"
-          echo "CFBundleIconName: ${ICON_NAME:-<vacío>}"
-          if [ -z "$ICON_NAME" ] || [ "$ICON_NAME" != "${EXPECTED_ICON_NAME}" ]; then
-            echo "::error::CFBundleIconName no coincide con '${EXPECTED_ICON_NAME}'"; exit 1
-          fi
-
-      - name: Subir a TestFlight (API Key preferente)
-        id: upload_api
-        continue-on-error: true
-        env:
-          APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_KEY_ID:      ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${APPSTORE_ISSUER_ID}" ] || [ -z "${APPSTORE_KEY_ID}" ] || [ -z "${APPSTORE_PRIVATE_KEY}" ]; then
-            echo "Faltan credenciales de API Key; saltando…"; exit 1
-          fi
-          KEYFILE="$RUNNER_TEMP/AuthKey_${APPSTORE_KEY_ID}.p8"
-          printf "%s" "$APPSTORE_PRIVATE_KEY" > "$KEYFILE"
-          chmod 600 "$KEYFILE"
-          xcrun iTMSTransporter -m upload \
-            -assetFile "${{ steps.ipa.outputs.ipa }}" \
-            -apiKey "$APPSTORE_KEY_ID" \
-            -apiIssuer "$APPSTORE_ISSUER_ID" \
-            -apiKeyFile "$KEYFILE" \
-            -v informational
-
-      - name: Subir a TestFlight (Apple ID fallback)
-        if: steps.upload_api.outcome != 'success'
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${APPLE_ID}" ] || [ -z "${APP_SPECIFIC_PASSWORD}" ]; then
-            echo "::error::No hay credenciales de fallback (Apple ID)"; exit 1
-          fi
-          xcrun iTMSTransporter -m upload \
-            -assetFile "${{ steps.ipa.outputs.ipa }}" \
-            -u "${APPLE_ID}" \
-            -p "${APP_SPECIFIC_PASSWORD}" \
-            -v informational
-
-      - name: Subir artefactos (IPA y perfil)
+      - name: Subir log de restore
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ipa-y-logs
+          name: ios-restore-log
+          path: ${{ runner.temp }}/restore.txt
+          if-no-files-found: warn
+
+  # ---------- JOB CARO EN macOS (sólo si pasa el PreCheck) ----------
+  build-and-upload:
+    needs: restore-check
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      PROJECT_PATH: ${{ needs.restore-check.outputs.project_path }}
+    steps:
+      - name: Checkout (repo CI)
+        uses: actions/checkout@v4
+
+      - name: Checkout repo privado (código)
+        uses: actions/checkout@v4
+        with:
+          repository: Salvacuentacuentos/Eraseunaapp
+          path: ${{ env.SOURCE_DIR }}
+          ref: ${{ github.event.inputs.ref }}
+          ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
+
+      - name: Select Xcode ${{ env.XCODE_VERSION }}
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Verificar iOS SDK >= 18
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          SDKVERS=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iPhoneOS SDK: $SDKVERS"
+          [[ "${SDKVERS%%.*}" -ge 18 ]]
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Pin SDK (global.json)
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
+          echo "DOTNET_ROLL_FORWARD=Disable" >> "$GITHUB_ENV"
+          echo "DOTNET_MULTILEVEL_LOOKUP=0" >> "$GITHUB_ENV"
+          dotnet --info | sed -n '1,70p'
+
+      # Caches
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj','**/Directory.Packages.props','**/global.json') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Cache .NET packs/workloads
+        uses: actions/cache@v4
+        with:
           path: |
-            ${{ steps.ipa.outputs.ipa }}
-            $HOME/Library/MobileDevice/Provisioning Profiles/${{ env.PP_UUID }}.mobileprovision
+            ~/.dotnet/packs
+            ~/.dotnet/sdk-manifests
+            ~/.dotnet/workloadinstallpacks
+            ~/.dotnet/metadata/workloads
+          key: ${{ runner.os }}-dotnetpacks-${{ env.DOTNET_VERSION }}
+          restore-keys: ${{ runner.os }}-dotnetpacks-
+
+      - name: Install MAUI workload (iOS only)
+        run: |
+          set -euo pipefail
+          dotnet workload install maui-ios --skip-manifest-update --ignore-failed-sources
+          dotnet workload list
+
+      # Reinyectar overrides (nuevo checkout)
+      - name: Inyectar Directory.Build.props/targets (raíz)
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          cat > Directory.Build.props <<'XML'
+          <Project>
+            <PropertyGroup>
+              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+              <WarningsAsErrors></WarningsAsErrors>
+              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
+              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
+              <NoWarn>$(NoWarn);NU1605</NoWarn>
+              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
+            </PropertyGroup>
+          </Project>
+          XML
+          cat > Directory.Build.targets <<'XML'
+          <Project>
+            <PropertyGroup>
+              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+              <WarningsAsErrors></WarningsAsErrors>
+              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
+              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
+              <NoWarn>$(NoWarn);NU1605</NoWarn>
+              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
+            </PropertyGroup>
+          </Project>
+          XML
+
+      # ---------- Firma ----------
+      - name: Decode .p12
+        env:
+          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+
+      - name: Create & unlock keychain
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Import .p12 into keychain
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          security import "$RUNNER_TEMP/dist.p12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          ID="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -E 'Apple Distribution:' | head -n1 | sed -E 's/.*"(.+)".*/\1/')"
+          [ -n "$ID" ] || { echo "::error::No se encontró identidad 'Apple Distribution'"; exit 1; }
+          TEAMID="$(echo "$ID" | sed -n 's/.*(\(.*\)).*/\1/p')"
+          echo "CODESIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
+          echo "TEAMID=$TEAMID" >> "$GITHUB_ENV"
+
+      - name: Install provisioning profile (App Store)
+        env:
+          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
+        run: |
+          set -euo pipefail
+          PP="$RUNNER_TEMP/profile.mobileprovision"
+          printf %s "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PP"
+          INFO=$(security cms -D -i "$PP")
+          UUID=$(echo "$INFO" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          echo "PROVISIONING_UUID=$UUID" >> "$GITHUB_ENV"
+
+      # ---------- BUILD & ARCHIVE ----------
+      - name: Publish (genera .xcarchive) + binlog
+        id: publish
+        working-directory: ${{ env.SOURCE_DIR }}
+        run: |
+          set -euo pipefail
+          LOG_BIN="$RUNNER_TEMP/build.binlog"
+          LOG_TXT="$RUNNER_TEMP/build.txt"
+          set +e
+          dotnet publish "${PROJECT_PATH}" \
+            -f net8.0-ios -c "${CONFIGURATION}" -r "${RUNTIME_IDENTIFIER}" \
+            -p:ArchiveOnBuild=true \
+            -p:CodesignKeychain="${KEYCHAIN_PATH}" \
+            -p:CodesignKey="${CODESIGN_IDENTITY}" \
+            -p:CodesignTeamId="${TEAMID}" \
+            -p:ProvisioningProfileUuid="${PROVISIONING_UUID}" \
+            -p:TreatWarningsAsErrors=false \
+            -p:WarningsAsErrors= \
+            -p:RestoreWarningsAsErrors= \
+            -p:RestoreTreatWarningsAsErrors=false \
+            -p:NoWarn=NU1605 \
+            -p:RestoreNoWarn=NU1605 \
+            -bl:"$LOG_BIN" -v:m | tee "$LOG_TXT"
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          echo "BINLOG=$LOG_BIN" >> "$GITHUB_ENV"
+          echo "TXTLOG=$LOG_TXT" >> "$GITHUB_ENV"
+
+          ARCHIVE_PATH=$(/usr/bin/find "$GITHUB_WORKSPACE/${{ env.SOURCE_DIR }}/bin" -type d -name '*.xcarchive' -print -quit || true)
+          if [ -z "${ARCHIVE_PATH:-}" ]; then
+            ARCHDIR="$HOME/Library/Developer/Xcode/Archives/$(date +%Y-%m-%d)"
+            ARCHIVE_PATH=$(/usr/bin/find "$ARCHDIR" -maxdepth 1 -type d -name '*.xcarchive' -print -quit || true)
+          fi
+          if [ -z "${ARCHIVE_PATH:-}" ]; then
+            echo "::error::No .xcarchive found (exit=$STATUS). Mira ios-build-logs."
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$ARCHIVE_PATH" | tee -a "$GITHUB_ENV"
+          echo "archive=$ARCHIVE_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build logs (binlog + txt)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: |
+            ${{ env.BINLOG }}
+            ${{ env.TXTLOG }}
+          if-no-files-found: warn
+
+      - name: Export .ipa (App Store)
+        if: ${{ steps.publish.outputs.archive != '' }}
+        id: export
+        run: |
+          set -euo pipefail
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT_DIR"
+          cat > "$RUNNER_TEMP/exportOptions.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>uploadSymbols</key><true/>
+            <key>compileBitcode</key><false/>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
+            -exportPath "$EXPORT_DIR" -allowProvisioningUpdates
+          IPA_FOUND=$(find "$EXPORT_DIR" -maxdepth 1 -name "*.ipa" -print -quit || true)
+          [ -n "${IPA_FOUND:-}" ] || { echo "::error::No .ipa generated"; exit 1; }
+          echo "IPA_PATH=$IPA_FOUND" | tee -a "$GITHUB_ENV"
+          echo "ipa=$IPA_FOUND" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to TestFlight (Transporter)
+        if: ${{ steps.export.outputs.ipa != '' }}
+        env:
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY_P8: ${{ secrets.APPSTORE_PRIVATE_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
+          printf %s "$APPSTORE_PRIVATE_KEY_P8" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          xcrun iTMSTransporter -m upload \
+            -apiKey "$APPSTORE_KEY_ID" \
+            -apiIssuer "$APPSTORE_ISSUER_ID" \
+            -assetFile "$IPA_PATH" -v informational
+
+      - name: Upload artifacts (ipa + dSYMs + logs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-outputs
+          path: |
+            ${{ env.IPA_PATH }}
+            ${{ env.ARCHIVE_PATH }}/dSYMs
+            ${{ env.BINLOG }}
+            ${{ env.TXTLOG }}
           if-no-files-found: warn
