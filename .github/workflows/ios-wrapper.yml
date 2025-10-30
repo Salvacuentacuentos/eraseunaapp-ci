@@ -10,6 +10,11 @@ concurrency:
 permissions:
   contents: read
 
+# Asegura bash por defecto
+defaults:
+  run:
+    shell: bash
+
 env:
   DOTNET_VERSION: 8.0.415
   XCODE_VERSION: "16.1"   # iOS 18 SDK requerido por Microsoft.iOS 18.x
@@ -176,7 +181,6 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
       - name: Import .p12 into keychain and allow codesign (robust)
-        shell: bash
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
@@ -259,28 +263,28 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PROFILE_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 9) Build number único (timestamp UTC)
+      # 9) Build number único (UTC timestamp)
       - name: Compute build number (UTC timestamp)
         id: buildno
-        shell: bash
         run: |
           set -euo pipefail
-          BN=$(date -u +%Y%m%d%H%M%S)   # 14 dígitos, válido para CFBundleVersion
-          echo "BUILD_NUMBER=$BN" >> $GITHUB_ENV
-          echo "🔢 BUILD_NUMBER=$BN"
-          - name: Verify 1024x1024 App Store icon
-          working-directory: ${{ steps.proj.outputs.srcdir }}
-           run: |
-           set -euo pipefail
-           ICON="Resources/AppIcon/appicon.png"
-           test -f "$ICON" || { echo "::error::Falta $ICON"; exit 1; }
-           sips -g pixelWidth -g pixelHeight -g hasAlpha "$ICON"
-           W=$(sips -g pixelWidth "$ICON" | awk '/pixelWidth/ {print $2}')
-           H=$(sips -g pixelHeight "$ICON" | awk '/pixelHeight/ {print $2}')
-           if [ "$W" != "1024" ] || [ "$H" != "1024" ]; then
-           echo "::error::El PNG debe ser exactamente 1024x1024 (actual ${W}x${H})"; exit 1
-           fi
+          BN="$(date -u +%Y%m%d%H%M%S)"   # 14 dígitos, válido para CFBundleVersion
+          printf 'BUILD_NUMBER=%s\n' "$BN" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$BN"
 
+      # 9.1) Verificar PNG 1024x1024 para App Store (ios-marketing)
+      - name: Verify 1024x1024 App Store icon
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        run: |
+          set -euo pipefail
+          ICON="Resources/AppIcon/appicon.png"
+          test -f "$ICON" || { echo "::error::Falta $ICON"; exit 1; }
+          sips -g pixelWidth -g pixelHeight -g hasAlpha "$ICON"
+          W=$(sips -g pixelWidth "$ICON" | awk '/pixelWidth/ {print $2}')
+          H=$(sips -g pixelHeight "$ICON" | awk '/pixelHeight/ {print $2}')
+          if [ "$W" != "1024" ] || [ "$H" != "1024" ]; then
+            echo "::error::El PNG debe ser exactamente 1024x1024 (actual ${W}x${H})"; exit 1
+          fi
 
       # 10) Publicar y generar .ipa
       - name: Publish (.xcarchive) + .ipa
@@ -316,7 +320,6 @@ jobs:
 
       - name: Inspect IPA bundle id, versions & icon name
         if: steps.findipa.outputs.ipa != ''
-        shell: bash
         run: |
           set -euo pipefail
           IPA="${{ steps.findipa.outputs.ipa }}"
