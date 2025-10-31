@@ -107,8 +107,6 @@ jobs:
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
-          echo "DOTNET_ROLL_FORWARD=Disable" >> "$GITHUB_ENV"
-          echo "DOTNET_MULTILEVEL_LOOKUP=0" >> "$GITHUB_ENV"
           dotnet --info | sed -n '1,70p'
 
       - name: Cache NuGet
@@ -129,7 +127,6 @@ jobs:
           key: ${{ runner.os }}-dotnetpacks-${{ env.DOTNET_VERSION }}
           restore-keys: ${{ runner.os }}-dotnetpacks-
 
-      # ⬇️ ARREGLO: instalar meta-workload MAUI + iOS + maccatalyst y luego workload restore
       - name: Install MAUI workloads (MAUI + iOS + MacCatalyst) y restore
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
@@ -285,6 +282,7 @@ jobs:
             -p:ApplicationVersion=$BUILD_NO \
             -p:CFBundleVersion=$BUILD_NO \
             -p:CFBundleIconName=${EXPECTED_ICON_NAME} \
+            -p:PublishTrimmed=false \
             -p:CodesignKeychain="${KEYCHAIN_PATH}" \
             -p:CodesignKey="${CODESIGN_IDENTITY}" \
             -p:CodesignTeamId="${TEAMID}" \
