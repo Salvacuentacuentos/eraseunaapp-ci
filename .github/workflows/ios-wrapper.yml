@@ -282,7 +282,7 @@ jobs:
             -p:ApplicationVersion=$BUILD_NO \
             -p:CFBundleVersion=$BUILD_NO \
             -p:CFBundleIconName=${EXPECTED_ICON_NAME} \
-            -p:PublishTrimmed=false \
+            -p:MtouchLink=None \
             -p:CodesignKeychain="${KEYCHAIN_PATH}" \
             -p:CodesignKey="${CODESIGN_IDENTITY}" \
             -p:CodesignTeamId="${TEAMID}" \
