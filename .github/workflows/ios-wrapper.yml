@@ -24,7 +24,7 @@ env:
   EXPECTED_ICON_NAME: AppIcon
 
 jobs:
-  # ---------- PRECHECK LIGERO EN LINUX (sin restore) ----------
+  # ---------- PRECHECK LIGERO EN LINUX ----------
   restore-check:
     runs-on: ubuntu-latest
     outputs:
@@ -136,8 +136,7 @@ jobs:
           dotnet workload restore
           dotnet workload list
 
-      # Neutralizar NU1605 (si hay mezcla 8.0.92/8.0.100)
-      - name: Inyectar Directory.Build.props/targets (raíz)
+      - name: Inyectar Directory.Build.props/targets (raíz) para silenciar NU1605
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           cat > Directory.Build.props <<'XML'
@@ -188,53 +187,33 @@ jobs:
           KC="$KEYCHAIN_PATH"
           P12="$RUNNER_TEMP/dist.p12"
           printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
-
-          try_import() {
-            local file="$1"; local pass="${2-}"
-            if [ -z "${pass:-}" ]; then
-              security import "$file" -k "$KC" -A -f pkcs12
-            else
-              security import "$file" -k "$KC" -P "$pass" -A -f pkcs12
-            fi
-          }
-
-          echo "Importando .p12 original…"
-          if try_import "$P12" "${IOS_DISTRIBUTION_P12_PASSWORD:-}"; then
-            echo "Import OK (original)."
-          else
-            echo "Fallo import original. Reempaquetando a PKCS12 legacy…"
-            openssl pkcs12 -in "$P12" -passin pass:"${IOS_DISTRIBUTION_P12_PASSWORD:-}" -nodes -out "$RUNNER_TEMP/tmp.pem" >/dev/null 2>&1 || true
-            openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -out "$RUNNER_TEMP/dist-legacy.p12" -passout pass:"${IOS_DISTRIBUTION_P12_PASSWORD:-}" >/dev/null 2>&1 || true
-
-            echo "Reintentando con reempacado y misma pass…"
-            if try_import "$RUNNER_TEMP/dist-legacy.p12" "${IOS_DISTRIBUTION_P12_PASSWORD:-}"; then
-              echo "Import OK (legacy con pass)."
-            else
-              echo "Último intento: contraseña vacía…"
-              try_import "$P12" "" || { echo "::error::No se pudo importar el .p12 (¿password incorrecta o .p12 corrupto?)"; exit 1; }
-            fi
+          if ! security import "$P12" -k "$KC" -P "${IOS_DISTRIBUTION_P12_PASSWORD:-}" -A -f pkcs12; then
+            openssl pkcs12 -in "$P12" -passin pass:"${IOS_DISTRIBUTION_P12_PASSWORD:-}" -nodes -out "$RUNNER_TEMP/tmp.pem"
+            openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -out "$RUNNER_TEMP/dist-legacy.p12" -passout pass:"${IOS_DISTRIBUTION_P12_PASSWORD:-}"
+            security import "$RUNNER_TEMP/dist-legacy.p12" -k "$KC" -P "${IOS_DISTRIBUTION_P12_PASSWORD:-}" -A -f pkcs12
           fi
-
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KC"
-
           ID="$(security find-identity -v -p codesigning "$KC" | grep -E 'Apple Distribution:' | head -n1 | sed -E 's/.*"(.+)".*/\1/')"
-          [ -n "$ID" ] || { echo "::error::Importó el .p12 pero no hay identidad 'Apple Distribution'"; exit 1; }
+          [ -n "$ID" ] || { echo "::error::No hay identidad 'Apple Distribution' tras importar p12"; exit 1; }
           TEAMID="$(echo "$ID" | sed -n 's/.*(\(.*\)).*/\1/p')"
           echo "CODESIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
           echo "TEAMID=$TEAMID" >> "$GITHUB_ENV"
 
-      - name: Install provisioning profile (App Store)
+      - name: Instalar provisioning profile (App Store)
         env:
           IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
         run: |
           set -euo pipefail
-          PP="$RUNNER_TEMP/profile.mobileprovision"
-          printf %s "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PP"
-          INFO=$(security cms -D -i "$PP")
-          UUID=$(echo "$INFO" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
+          PP_RAW="$RUNNER_TEMP/profile.mobileprovision"
+          printf %s "$IOS_APPSTORE_PROFILE_B64" | base64 --decode > "$PP_RAW"
+          security cms -D -i "$PP_RAW" > "$RUNNER_TEMP/profile.plist"
+          PP_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          PP_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/profile.plist")
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$PP" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
-          echo "PROVISIONING_UUID=$UUID" >> "$GITHUB_ENV"
+          cp "$PP_RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
+          echo "PROVISIONING_UUID=$PP_UUID" >> "$GITHUB_ENV"
+          echo "PROVISIONING_NAME=$PP_NAME" >> "$GITHUB_ENV"
+          echo "Perfil instalado: $PP_NAME ($PP_UUID)"
 
       # ---------- Check icono ----------
       - name: Verificar icono App Store (1024x1024, PNG)
@@ -242,22 +221,23 @@ jobs:
         run: |
           set -euo pipefail
           PROJ_DIR="$(cd "$(dirname "$PROJECT_PATH")" && pwd)"
-          CANDIDATES=()
-          CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/appicon.png" )
-          CANDIDATES+=( "$PROJ_DIR/Resources/appicon.png" )
-          CANDIDATES+=( "$PROJ_DIR/Resources/AppIcon/AppIcon.png" )
+          CANDIDATES=(
+            "$PROJ_DIR/Resources/AppIcon/appicon.png"
+            "$PROJ_DIR/Resources/appicon.png"
+            "$PROJ_DIR/Resources/AppIcon/AppIcon.png"
+          )
           FOUND=""
           for f in "${CANDIDATES[@]}"; do
             [ -f "$f" ] || continue
-            W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
-            H=$(sips -g pixelHeight "$f" 2>/dev/null | awk '/pixelHeight/ {print $2}')
+            W=$(sips -g pixelWidth  "$f" | awk '/pixelWidth/ {print $2}')
+            H=$(sips -g pixelHeight "$f" | awk '/pixelHeight/ {print $2}')
             echo "Probe: $f -> ${W}x${H}"
             if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
           done
           if [ -z "$FOUND" ]; then
             while IFS= read -r -d '' f; do
-              W=$(sips -g pixelWidth  "$f" 2>/dev/null | awk '/pixelWidth/ {print $2}')
-              H=$(sips -g pixelHeight "$f" 2>/dev/null | awk '/pixelHeight/ {print $2}')
+              W=$(sips -g pixelWidth  "$f" | awk '/pixelWidth/ {print $2}')
+              H=$(sips -g pixelHeight "$f" | awk '/pixelHeight/ {print $2}')
               echo "Scan: $f -> ${W}x${H}"
               if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
             done < <(find "$PROJ_DIR/Resources" -type f -iname '*.png' -print0 2>/dev/null)
@@ -288,11 +268,7 @@ jobs:
             -p:CodesignTeamId="${TEAMID}" \
             -p:ProvisioningProfileUuid="${PROVISIONING_UUID}" \
             -p:TreatWarningsAsErrors=false \
-            -p:WarningsAsErrors= \
-            -p:RestoreWarningsAsErrors= \
-            -p:RestoreTreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605 \
-            -p:RestoreNoWarn=NU1605 \
+            -p:NoWarn=NU1605 -p:RestoreNoWarn=NU1605 \
             -bl:"$LOG_BIN" -v:m | tee "$LOG_TXT"
           STATUS=${PIPESTATUS[0]}
           set -e
@@ -321,27 +297,41 @@ jobs:
             ${{ env.TXTLOG }}
           if-no-files-found: warn
 
-      - name: Export .ipa (App Store)
+      - name: Export .ipa (App Store) — firma manual con perfil
         if: ${{ steps.publish.outputs.archive != '' }}
         id: export
         run: |
           set -euo pipefail
+          # Obtener el bundle id del .xcarchive
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$ARCHIVE_PATH/Info.plist")
+          echo "BundleID en archive: $BUNDLE_ID"
+          echo "Perfil para export: ${PROVISIONING_NAME} (${PROVISIONING_UUID})"
+          echo "TeamID: ${TEAMID}"
+
           EXPORT_DIR="$RUNNER_TEMP/export"
           mkdir -p "$EXPORT_DIR"
-          cat > "$RUNNER_TEMP/exportOptions.plist" <<'PLIST'
+
+          cat > "$RUNNER_TEMP/exportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
             <key>method</key><string>app-store</string>
+            <key>teamID</key><string>${TEAMID}</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key><string>${PROVISIONING_NAME}</string>
+            </dict>
             <key>uploadSymbols</key><true/>
             <key>compileBitcode</key><false/>
-            <key>signingStyle</key><string>automatic</string>
           </dict></plist>
           PLIST
+
           xcodebuild -exportArchive \
             -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
-            -exportPath "$EXPORT_DIR" -allowProvisioningUpdates
+            -exportPath "$EXPORT_DIR"
+
           IPA_FOUND=$(find "$EXPORT_DIR" -maxdepth 1 -name "*.ipa" -print -quit || true)
           [ -n "${IPA_FOUND:-}" ] || { echo "::error::No .ipa generated"; exit 1; }
           echo "IPA_PATH=$IPA_FOUND" | tee -a "$GITHUB_ENV"
