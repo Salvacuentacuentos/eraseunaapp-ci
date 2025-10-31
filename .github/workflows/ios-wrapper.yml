@@ -296,6 +296,10 @@ jobs:
             ${{ env.BINLOG }}
             ${{ env.TXTLOG }}
           if-no-files-found: warn
+            APP=$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name "*.app" -print -quit)
+            echo "Entitlements del .app:"
+            codesign -d --entitlements :- "$APP" | cat
+
 
       - name: Export .ipa (App Store) — firma manual con perfil
         if: ${{ steps.publish.outputs.archive != '' }}
