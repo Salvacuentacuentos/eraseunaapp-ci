@@ -22,36 +22,30 @@ env:
   CONFIGURATION: Release
   RUNTIME_IDENTIFIER: ios-arm64
   EXPECTED_ICON_NAME: AppIcon
+  # Si alguna vez quieres saltarte SOLO la validación (no recomendado):
+  # SKIP_MULTICAST_CHECK: "true"
 
 jobs:
-  # ---------- PRECHECK LIGERO EN LINUX ----------
   restore-check:
     runs-on: ubuntu-latest
     outputs:
       project_path: ${{ steps.detect.outputs.project_path }}
     steps:
-      - name: Checkout (repo CI)
-        uses: actions/checkout@v4
-
-      - name: Checkout repo privado (código)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
           path: ${{ env.SOURCE_DIR }}
           ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
-
-      - name: Setup .NET (solo verificar SDK)
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Pin SDK (global.json en raíz del repo privado)
+      - name: Pin SDK (global.json)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
           dotnet --info | sed -n '1,30p'
-
       - name: Detectar proyecto host (Eraseunaapp.csproj)
         id: detect
         working-directory: ${{ env.SOURCE_DIR }}
@@ -66,7 +60,6 @@ jobs:
           echo "project_path=$PRJ" >> "$GITHUB_OUTPUT"
           echo "Usando host: $PRJ"
 
-  # ---------- BUILD COMPLETO EN macOS ----------
   build-and-upload:
     needs: restore-check
     runs-on: macos-14
@@ -74,11 +67,8 @@ jobs:
     env:
       PROJECT_PATH: ${{ needs.restore-check.outputs.project_path }}
     steps:
-      - name: Checkout (repo CI)
-        uses: actions/checkout@v4
-
-      - name: Checkout repo privado (código)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
           path: ${{ env.SOURCE_DIR }}
@@ -98,8 +88,7 @@ jobs:
           echo "iPhoneOS SDK: $SDKVERS"
           [[ "${SDKVERS%%.*}" -ge 18 ]]
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -127,7 +116,7 @@ jobs:
           key: ${{ runner.os }}-dotnetpacks-${{ env.DOTNET_VERSION }}
           restore-keys: ${{ runner.os }}-dotnetpacks-
 
-      - name: Install MAUI workloads (MAUI + iOS + MacCatalyst) y restore
+      - name: Install MAUI workloads
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
@@ -136,32 +125,28 @@ jobs:
           dotnet workload restore
           dotnet workload list
 
-      - name: Inyectar Directory.Build.props/targets (raíz) para silenciar NU1605
+      - name: Inyectar Directory.Build.props/targets (silenciar NU1605)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           cat > Directory.Build.props <<'XML'
-          <Project>
-            <PropertyGroup>
-              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <WarningsAsErrors></WarningsAsErrors>
-              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
-              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
-              <NoWarn>$(NoWarn);NU1605</NoWarn>
-              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
-            </PropertyGroup>
-          </Project>
+          <Project><PropertyGroup>
+            <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+            <WarningsAsErrors></WarningsAsErrors>
+            <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
+            <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
+            <NoWarn>$(NoWarn);NU1605</NoWarn>
+            <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
+          </PropertyGroup></Project>
           XML
           cat > Directory.Build.targets <<'XML'
-          <Project>
-            <PropertyGroup>
-              <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <WarningsAsErrors></WarningsAsErrors>
-              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
-              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
-              <NoWarn>$(NoWarn);NU1605</NoWarn>
-              <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
-            </PropertyGroup>
-          </Project>
+          <Project><PropertyGroup>
+            <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+            <WarningsAsErrors></WarningsAsErrors>
+            <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
+            <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
+            <NoWarn>$(NoWarn);NU1605</NoWarn>
+            <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
+          </PropertyGroup></Project>
           XML
 
       # ---------- Firma ----------
@@ -177,7 +162,7 @@ jobs:
           security default-keychain -s "$KEYCHAIN_PATH"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-      - name: Import .p12 (robusto) en keychain
+      - name: Import .p12 (robusto)
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
@@ -215,14 +200,24 @@ jobs:
           echo "PROVISIONING_NAME=$PP_NAME" >> "$GITHUB_ENV"
           echo "Perfil instalado: $PP_NAME ($PP_UUID)"
 
+      - name: Perfil — resumen y hash
+        run: |
+          set -euo pipefail
+          PERF="$HOME/Library/MobileDevice/Provisioning Profiles/${PROVISIONING_UUID}.mobileprovision"
+          echo "PROFILE_NAME=$PROVISIONING_NAME"
+          echo "PROFILE_UUID=$PROVISIONING_UUID"
+          echo "PROFILE_SHA256=$(shasum -a 256 "$PERF" | awk '{print $1}')"
+          echo "Entitlements en perfil:"
+          /usr/libexec/PlistBuddy -c 'Print :Entitlements' "$RUNNER_TEMP/profile.plist" | sed 's/^/  /'
+
       - name: Validar entitlement en perfil (multicast)
+        if: env.SKIP_MULTICAST_CHECK != 'true'
         run: |
           set -euo pipefail
           VAL=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.networking.multicast' "$RUNNER_TEMP/profile.plist" 2>/dev/null || echo "")
           echo "Perfil multicast entitlement: '${VAL}'"
           [ "$VAL" = "true" -o "$VAL" = "1" ] || { echo "::error::El perfil App Store NO incluye 'com.apple.developer.networking.multicast'. Sube un perfil regenerado con esa capability."; exit 1; }
 
-      # ---------- Check icono ----------
       - name: Verificar icono App Store (1024x1024, PNG)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
@@ -252,7 +247,6 @@ jobs:
           [ -n "$FOUND" ] || { echo "::error::No se encontró PNG 1024x1024 en $PROJ_DIR/Resources"; exit 1; }
           echo "OK 1024x1024: $FOUND"
 
-      # ---------- BUILD & ARCHIVE ----------
       - name: Publish (genera .xcarchive) + binlog
         id: publish
         working-directory: ${{ env.SOURCE_DIR }}
@@ -305,6 +299,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Validar entitlement en app (multicast)
+        if: env.SKIP_MULTICAST_CHECK != 'true'
         run: |
           set -euo pipefail
           APP=$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name "*.app" -print -quit)
