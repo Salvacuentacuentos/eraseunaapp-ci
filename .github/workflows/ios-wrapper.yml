@@ -24,35 +24,27 @@ env:
   EXPECTED_ICON_NAME: AppIcon
 
 jobs:
-  # ---------- PRECHECK LIGERO EN LINUX ----------
   restore-check:
     runs-on: ubuntu-latest
     outputs:
       project_path: ${{ steps.detect.outputs.project_path }}
     steps:
-      - name: Checkout (repo CI)
-        uses: actions/checkout@v4
-
-      - name: Checkout repo privado (código)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
           path: ${{ env.SOURCE_DIR }}
           ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
-
-      - name: Setup .NET (solo verificar SDK)
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Pin SDK (global.json en raíz del repo privado)
+      - name: Pin SDK (global.json en repo privado)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           echo '{ "sdk": { "version": "'"${DOTNET_VERSION}"'", "rollForward": "disable" } }' > global.json
           dotnet --info | sed -n '1,30p'
-
-      - name: Detectar proyecto host (Eraseunaapp.csproj)
+      - name: Detectar proyecto host
         id: detect
         working-directory: ${{ env.SOURCE_DIR }}
         shell: bash
@@ -62,11 +54,10 @@ jobs:
           if [ -z "$PRJ" ]; then
             PRJ="$(git ls-files '**/*.csproj' | xargs grep -l '<UseMaui>true</UseMaui>' | head -n1 || true)"
           fi
-          [ -n "$PRJ" ] || { echo "::error::No se encontró .csproj MAUI (Eraseunaapp)"; exit 1; }
+          [ -n "$PRJ" ] || { echo "::error::No se encontró .csproj MAUI"; exit 1; }
           echo "project_path=$PRJ" >> "$GITHUB_OUTPUT"
           echo "Usando host: $PRJ"
 
-  # ---------- BUILD COMPLETO EN macOS ----------
   build-and-upload:
     needs: restore-check
     runs-on: macos-14
@@ -74,18 +65,15 @@ jobs:
     env:
       PROJECT_PATH: ${{ needs.restore-check.outputs.project_path }}
     steps:
-      - name: Checkout (repo CI)
-        uses: actions/checkout@v4
-
-      - name: Checkout repo privado (código)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
           path: ${{ env.SOURCE_DIR }}
           ref: ${{ github.event.inputs.ref }}
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
-      - name: Select Xcode ${{ env.XCODE_VERSION }}
+      - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
@@ -98,8 +86,7 @@ jobs:
           echo "iPhoneOS SDK: $SDKVERS"
           [[ "${SDKVERS%%.*}" -ge 18 ]]
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -136,16 +123,13 @@ jobs:
           dotnet workload restore
           dotnet workload list
 
-      - name: Inyectar Directory.Build.props/targets (raíz) para silenciar NU1605
+      - name: Inyectar Directory.Build.props/targets para silenciar NU1605
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           cat > Directory.Build.props <<'XML'
           <Project>
             <PropertyGroup>
               <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <WarningsAsErrors></WarningsAsErrors>
-              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
-              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
               <NoWarn>$(NoWarn);NU1605</NoWarn>
               <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
             </PropertyGroup>
@@ -155,9 +139,6 @@ jobs:
           <Project>
             <PropertyGroup>
               <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-              <WarningsAsErrors></WarningsAsErrors>
-              <RestoreWarningsAsErrors></RestoreWarningsAsErrors>
-              <RestoreTreatWarningsAsErrors>false</RestoreTreatWarningsAsErrors>
               <NoWarn>$(NoWarn);NU1605</NoWarn>
               <RestoreNoWarn>$(RestoreNoWarn);NU1605</RestoreNoWarn>
             </PropertyGroup>
@@ -215,34 +196,29 @@ jobs:
           echo "PROVISIONING_NAME=$PP_NAME" >> "$GITHUB_ENV"
           echo "Perfil instalado: $PP_NAME ($PP_UUID)"
 
-      # ---------- Check icono ----------
+      - name: Validar entitlement en perfil (multicast)
+        run: |
+          set -euo pipefail
+          VAL=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.networking.multicast' "$RUNNER_TEMP/profile.plist" 2>/dev/null || echo "")
+          echo "Perfil multicast entitlement: '${VAL}'"
+          [ "$VAL" = "true" -o "$VAL" = "1" ] || { echo "::error::El perfil App Store NO incluye 'com.apple.developer.networking.multicast'. Sube un perfil regenerado con esa capability."; exit 1; }
+
+      # ---------- Icono ----------
       - name: Verificar icono App Store (1024x1024, PNG)
         working-directory: ${{ env.SOURCE_DIR }}
         run: |
           set -euo pipefail
           PROJ_DIR="$(cd "$(dirname "$PROJECT_PATH")" && pwd)"
-          CANDIDATES=(
-            "$PROJ_DIR/Resources/AppIcon/appicon.png"
-            "$PROJ_DIR/Resources/appicon.png"
-            "$PROJ_DIR/Resources/AppIcon/AppIcon.png"
-          )
+          CANDIDATES=("$PROJ_DIR/Resources/AppIcon/appicon.png" "$PROJ_DIR/Resources/appicon.png" "$PROJ_DIR/Resources/AppIcon/AppIcon.png")
           FOUND=""
           for f in "${CANDIDATES[@]}"; do
             [ -f "$f" ] || continue
-            W=$(sips -g pixelWidth  "$f" | awk '/pixelWidth/ {print $2}')
+            W=$(sips -g pixelWidth "$f" | awk '/pixelWidth/ {print $2}')
             H=$(sips -g pixelHeight "$f" | awk '/pixelHeight/ {print $2}')
             echo "Probe: $f -> ${W}x${H}"
             if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
           done
-          if [ -z "$FOUND" ]; then
-            while IFS= read -r -d '' f; do
-              W=$(sips -g pixelWidth  "$f" | awk '/pixelWidth/ {print $2}')
-              H=$(sips -g pixelHeight "$f" | awk '/pixelHeight/ {print $2}')
-              echo "Scan: $f -> ${W}x${H}"
-              if [ "$W" = "1024" ] && [ "$H" = "1024" ]; then FOUND="$f"; break; fi
-            done < <(find "$PROJ_DIR/Resources" -type f -iname '*.png' -print0 2>/dev/null)
-          fi
-          [ -n "$FOUND" ] || { echo "::error::No se encontró PNG 1024x1024 en $PROJ_DIR/Resources"; exit 1; }
+          [ -n "$FOUND" ] || { echo "::error::No se encontró PNG 1024x1024 en Resources"; exit 1; }
           echo "OK 1024x1024: $FOUND"
 
       # ---------- BUILD & ARCHIVE ----------
@@ -297,26 +273,25 @@ jobs:
             ${{ env.TXTLOG }}
           if-no-files-found: warn
 
-      - name: Mostrar entitlements del .app
+      - name: Validar entitlement en app (multicast)
         run: |
+          set -euo pipefail
           APP=$(find "$ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name "*.app" -print -quit)
           echo "Entitlements del .app:"
-          codesign -d --entitlements :- "$APP" | cat
+          codesign -d --entitlements :- "$APP" | tee "$RUNNER_TEMP/app.entitlements"
+          grep -q "com.apple.developer.networking.multicast" "$RUNNER_TEMP/app.entitlements" || { echo "::error::El .app NO incluye el entitlement multicast. Revisa Entitlements.plist / .csproj"; exit 1; }
 
       - name: Export .ipa (App Store) — firma manual con perfil
         if: ${{ steps.publish.outputs.archive != '' }}
         id: export
         run: |
           set -euo pipefail
-          # Obtener el bundle id del .xcarchive
           BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleIdentifier' "$ARCHIVE_PATH/Info.plist")
           echo "BundleID en archive: $BUNDLE_ID"
           echo "Perfil para export: ${PROVISIONING_NAME} (${PROVISIONING_UUID})"
           echo "TeamID: ${TEAMID}"
 
-          EXPORT_DIR="$RUNNER_TEMP/export"
-          mkdir -p "$EXPORT_DIR"
-
+          EXPORT_DIR="$RUNNER_TEMP/export"; mkdir -p "$EXPORT_DIR"
           cat > "$RUNNER_TEMP/exportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -324,8 +299,7 @@ jobs:
             <key>method</key><string>app-store</string>
             <key>teamID</key><string>${TEAMID}</string>
             <key>signingStyle</key><string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
+            <key>provisioningProfiles</key><dict>
               <key>${BUNDLE_ID}</key><string>${PROVISIONING_NAME}</string>
             </dict>
             <key>uploadSymbols</key><true/>
@@ -333,8 +307,7 @@ jobs:
           </dict></plist>
           PLIST
 
-          xcodebuild -exportArchive \
-            -archivePath "$ARCHIVE_PATH" \
+          xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
             -exportOptionsPlist "$RUNNER_TEMP/exportOptions.plist" \
             -exportPath "$EXPORT_DIR"
 
@@ -346,17 +319,14 @@ jobs:
       - name: Verificar CFBundleIconName dentro de la IPA
         run: |
           set -euo pipefail
-          TMP="$RUNNER_TEMP/ipa_unzip"
-          mkdir -p "$TMP"
+          TMP="$RUNNER_TEMP/ipa_unzip"; mkdir -p "$TMP"
           unzip -q "${IPA_PATH}" -d "$TMP"
           PLIST=$(find "$TMP/Payload" -maxdepth 2 -name "Info.plist" -print -quit)
           NAME1=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$PLIST" 2>/dev/null || true)
           NAME2=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconName' "$PLIST" 2>/dev/null || true)
           ICON_NAME="${NAME1:-$NAME2}"
           echo "CFBundleIconName: ${ICON_NAME:-<vacío>}"
-          if [ -z "$ICON_NAME" ] || [ "$ICON_NAME" != "${EXPECTED_ICON_NAME}" ]; then
-            echo "::error::CFBundleIconName no coincide con '${EXPECTED_ICON_NAME}'"; exit 1;
-          fi
+          [ -n "$ICON_NAME" ] && [ "$ICON_NAME" = "${EXPECTED_ICON_NAME}" ] || { echo "::error::CFBundleIconName no coincide con '${EXPECTED_ICON_NAME}'"; exit 1; }
 
       - name: Upload to TestFlight (Transporter)
         if: ${{ steps.export.outputs.ipa != '' }}
