@@ -19,6 +19,7 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # 1) Repos
       - name: Checkout (CI repo)
         uses: actions/checkout@v4
 
@@ -29,6 +30,7 @@ jobs:
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
+      # 2) Toolchain
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -57,6 +59,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # 3) Localizar proyecto y fijar SDK
       - name: Locate project (auto)
         id: proj
         shell: bash
@@ -87,7 +90,7 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # ==== ICONOS: catálogo manual en Platforms/iOS ====
+      # 4) ICONOS: catálogo manual en Platforms/iOS
       - name: Synthesize AppIcon (Platforms/iOS/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -96,7 +99,6 @@ jobs:
           ICON=Resources/AppIcon/appicon.png
           [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
 
-          # limpia catálogos que molesten
           rm -rf Resources/Assets.xcassets || true
           rm -rf Platforms/iOS/Assets.xcassets || true
 
@@ -104,10 +106,8 @@ jobs:
           SET_DIR="$IOS_XC/AppIcon.appiconset"
           mkdir -p "$SET_DIR"
 
-          # raíz del catálogo
-          cat > "$IOS_XC/Contents.json" <<'JSON'
-          { "info": { "version": 1, "author": "xcode" } }
-          JSON
+          # Raíz del catálogo
+          printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$IOS_XC/Contents.json"
 
           gen() { local px="$1" name="$2"; sips -s format png "$ICON" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
           # iPhone
@@ -119,9 +119,9 @@ jobs:
           gen 20  "icon-20-ipad.png"; gen 40  "icon-20-ipad@2x.png"
           gen 29  "icon-29-ipad.png"; gen 58  "icon-29-ipad@2x.png"
           gen 40  "icon-40-ipad.png"; gen 80  "icon-40-ipad@2x.png"
-          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"    # <-- 152x152
+          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"
           gen 167 "icon-83.5@2x.png"
-          # Marketing 1024 (Any Appearance)
+          # Marketing 1024
           gen 1024 "icon-marketing.png"
 
           cat > "$SET_DIR/Contents.json" <<'JSON'
@@ -143,7 +143,7 @@ jobs:
               { "idiom": "ipad", "size": "40x40", "scale": "1x", "filename": "icon-40-ipad.png" },
               { "idiom": "ipad", "size": "40x40", "scale": "2x", "filename": "icon-40-ipad@2x.png" },
               { "idiom": "ipad", "size": "76x76", "scale": "1x", "filename": "icon-76.png" },
-              { "idiom": "ipad", "size": "76x76", "scale": "2x", "filename": "icon-76@2x.png" },   // 152x152
+              { "idiom": "ipad", "size": "76x76", "scale": "2x", "filename": "icon-76@2x.png" },
               { "idiom": "ipad", "size": "83.5x83.5", "scale": "2x", "filename": "icon-83.5@2x.png" },
 
               { "idiom": "ios-marketing", "size": "1024x1024", "scale": "1x", "filename": "icon-marketing.png" }
@@ -156,7 +156,7 @@ jobs:
           echo "✅ Catálogo creado en $SET_DIR"
           ls -la "$SET_DIR"
 
-      # ===== Firma =====
+      # 5) Firma
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -205,34 +205,35 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # ===== Build =====
+      # 6) Restore (SOLO restore, sin publish aquí)
       - name: Restore
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-           dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
+          dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
-          - name: Publish (.xcarchive + .ipa)
-          working-directory: ${{ steps.proj.outputs.srcdir }}
-          shell: bash
-          run: |
+      # 7) Publish (.xcarchive + .ipa) — ruta COMPLETA del csproj
+      - name: Publish (.xcarchive + .ipa)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        shell: bash
+        run: |
           set -euo pipefail
           PROJ="${{ steps.proj.outputs.csproj }}"
           echo "Publicando proyecto: $PROJ"
           dotnet publish "$PROJ" \
-          -c Release -f net8.0-ios \
-          -p:RuntimeIdentifier=ios-arm64 \
-          -p:ArchiveOnBuild=true \
-          -p:BuildIpa=true \
-          -p:PublishTrimmed=true \
-          -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
-          -p:CFBundleIconName=AppIcon \
-          -p:TreatWarningsAsErrors=false \
-          -p:NoWarn=NU1605
-           echo "Publish OK"
+            -c Release -f net8.0-ios \
+            -p:RuntimeIdentifier=ios-arm64 \
+            -p:ArchiveOnBuild=true \
+            -p:BuildIpa=true \
+            -p:PublishTrimmed=true \
+            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
+            -p:CFBundleIconName=AppIcon \
+            -p:TreatWarningsAsErrors=false \
+            -p:NoWarn=NU1605
+          echo "Publish OK"
 
-
+      # 8) Localizar IPA
       - name: Find IPA
         id: findipa
         shell: bash
@@ -244,6 +245,7 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
+      # 9) Comprobación dentro del IPA
       - name: Inspect IPA bundle id & icon name
         shell: bash
         run: |
@@ -253,6 +255,7 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin)"
 
+      # 10) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -274,6 +277,7 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
+      # 11) Artefactos
       - name: Upload artifact (IPA)
         uses: actions/upload-artifact@v4
         with:
