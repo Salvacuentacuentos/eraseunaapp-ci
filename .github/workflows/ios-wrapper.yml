@@ -90,52 +90,55 @@ jobs:
 
       # === FIX ICONOS: crear un asset catalog VÁLIDO con raíz + appiconset ===
       - name: Synthesize AppIcon (xcassets with ios-marketing)
-        shell: bash
-        run: |
-          set -euo pipefail
-          SRC="${{ steps.proj.outputs.srcdir }}"
-          ICON_SRC="$SRC/Resources/AppIcon/appicon.png"
-          XC_ROOT="$SRC/Platforms/iOS/Assets.xcassets"
-          SET_DIR="$XC_ROOT/AppIcon.appiconset"
-          [ -s "$ICON_SRC" ] || { echo "Falta $ICON_SRC"; exit 1; }
-          mkdir -p "$SET_DIR"
+  shell: bash
+  run: |
+    set -euo pipefail
+    SRC="${{ steps.proj.outputs.srcdir }}"
+    ICON_SRC="$SRC/Resources/AppIcon/appicon.png"   # <- tu ruta
+    XC_ROOT="$SRC/Resources/Assets.xcassets"        # <- raíz correcta para MAUI
+    SET_DIR="$XC_ROOT/AppIcon.appiconset"
+    [ -s "$ICON_SRC" ] || { echo "Falta $ICON_SRC"; exit 1; }
+    mkdir -p "$SET_DIR"
 
-          # Raíz del catálogo (¡imprescindible!)
-          cat > "$XC_ROOT/Contents.json" <<'JSON'
-          { "info": { "version": 1, "author": "xcode" } }
-          JSON
+    # Raíz del catálogo
+    cat > "$XC_ROOT/Contents.json" <<'JSON'
+    { "info": { "version": 1, "author": "xcode" } }
+    JSON
 
-          gen() { local px="$1" name="$2"; sips -s format png "$ICON_SRC" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
-          gen 40 "icon-20@2x.png";   gen 60 "icon-20@3x.png"
-          gen 58 "icon-29@2x.png";   gen 87 "icon-29@3x.png"
-          gen 80 "icon-40@2x.png";   gen 120 "icon-40@3x.png"
-          gen 120 "icon-60@2x.png";  gen 180 "icon-60@3x.png"
-          gen 76 "icon-76.png";      gen 152 "icon-76@2x.png"
-          gen 167 "icon-83.5@2x.png"
-          gen 1024 "icon-marketing.png"
+    gen() { local px="$1" name="$2"; sips -s format png "$ICON_SRC" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
+    gen 40  "icon-20@2x.png";   gen 60  "icon-20@3x.png"
+    gen 58  "icon-29@2x.png";   gen 87  "icon-29@3x.png"
+    gen 80  "icon-40@2x.png";   gen 120 "icon-40@3x.png"
+    gen 120 "icon-60@2x.png";   gen 180 "icon-60@3x.png"
+    gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"
+    gen 167 "icon-83.5@2x.png"
+    gen 1024 "icon-marketing.png"
 
-          cat > "$SET_DIR/Contents.json" <<'JSON'
-          {
-            "images": [
-              { "size": "20x20",   "idiom": "iphone", "scale": "2x", "filename": "icon-20@2x.png" },
-              { "size": "20x20",   "idiom": "iphone", "scale": "3x", "filename": "icon-20@3x.png" },
-              { "size": "29x29",   "idiom": "iphone", "scale": "2x", "filename": "icon-29@2x.png" },
-              { "size": "29x29",   "idiom": "iphone", "scale": "3x", "filename": "icon-29@3x.png" },
-              { "size": "40x40",   "idiom": "iphone", "scale": "2x", "filename": "icon-40@2x.png" },
-              { "size": "40x40",   "idiom": "iphone", "scale": "3x", "filename": "icon-40@3x.png" },
-              { "size": "60x60",   "idiom": "iphone", "scale": "2x", "filename": "icon-60@2x.png" },
-              { "size": "60x60",   "idiom": "iphone", "scale": "3x", "filename": "icon-60@3x.png" },
+    cat > "$SET_DIR/Contents.json" <<'JSON'
+    {
+      "images": [
+        { "size": "20x20",   "idiom": "iphone", "scale": "2x", "filename": "icon-20@2x.png" },
+        { "size": "20x20",   "idiom": "iphone", "scale": "3x", "filename": "icon-20@3x.png" },
+        { "size": "29x29",   "idiom": "iphone", "scale": "2x", "filename": "icon-29@2x.png" },
+        { "size": "29x29",   "idiom": "iphone", "scale": "3x", "filename": "icon-29@3x.png" },
+        { "size": "40x40",   "idiom": "iphone", "scale": "2x", "filename": "icon-40@2x.png" },
+        { "size": "40x40",   "idiom": "iphone", "scale": "3x", "filename": "icon-40@3x.png" },
+        { "size": "60x60",   "idiom": "iphone", "scale": "2x", "filename": "icon-60@2x.png" },
+        { "size": "60x60",   "idiom": "iphone", "scale": "3x", "filename": "icon-60@3x.png" },
 
-              { "size": "76x76",   "idiom": "ipad",   "scale": "1x", "filename": "icon-76.png" },
-              { "size": "76x76",   "idiom": "ipad",   "scale": "2x", "filename": "icon-76@2x.png" },
-              { "size": "83.5x83.5","idiom": "ipad",  "scale": "2x", "filename": "icon-83.5@2x.png" },
+        { "size": "76x76",   "idiom": "ipad",   "scale": "1x", "filename": "icon-76.png" },
+        { "size": "76x76",   "idiom": "ipad",   "scale": "2x", "filename": "icon-76@2x.png" },
+        { "size": "83.5x83.5","idiom": "ipad",  "scale": "2x", "filename": "icon-83.5@2x.png" },
 
-              { "size": "1024x1024", "idiom": "ios-marketing", "scale": "1x", "filename": "icon-marketing.png" }
-            ],
-            "properties": { "preRendered": false },
-            "info": { "version": 1, "author": "xcode" }
-          }
-          JSON
+        { "size": "1024x1024", "idiom": "ios-marketing", "scale": "1x", "filename": "icon-marketing.png" }
+      ],
+      "properties": { "preRendered": false },
+      "info": { "version": 1, "author": "xcode" }
+    }
+    JSON
+
+    echo "✅ AppIcon catalog listo en $XC_ROOT"
+
 
       - name: Restore (TFM iOS)
         working-directory: ${{ steps.proj.outputs.srcdir }}
