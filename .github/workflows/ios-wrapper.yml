@@ -12,7 +12,7 @@ permissions:
 
 env:
   DOTNET_VERSION: 8.0.415
-  XCODE_VERSION: "16.1"
+  XCODE_VERSION: "16.1"         # SDK iOS 18
   CONFIGURATION: Release
   RUNTIME_IDENTIFIER: ios-arm64
 
@@ -21,9 +21,11 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # 1) Repo CI (este)
       - name: Checkout (CI repo)
         uses: actions/checkout@v4
 
+      # 2) Repo privado con el código
       - name: Checkout private source
         uses: actions/checkout@v4
         with:
@@ -31,48 +33,77 @@ jobs:
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
+      # 3) Herramientas
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Point .NET to selected Xcode (DEVELOPER_DIR & MD_APPLE_SDK_ROOT)
+        run: |
+          set -euo pipefail
+          XCODE_DEV="$(xcode-select -p)"                         # /Applications/Xcode_16.1.app/Contents/Developer
+          XCODE_APP="$(dirname "$(dirname "$XCODE_DEV")")"       # /Applications/Xcode_16.1.app
+          echo "DEVELOPER_DIR=$XCODE_DEV"     >> "$GITHUB_ENV"
+          echo "MD_APPLE_SDK_ROOT=$XCODE_APP" >> "$GITHUB_ENV"
+          xcodebuild -version
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
         id: proj
         run: |
           set -euo pipefail
           CS=$(find source -maxdepth 6 -type f -name "Eraseunaapp.csproj" -print -quit)
-          [ -n "$CS" ] || { echo "::error::No se encontró Eraseunaapp.csproj"; exit 1; }
+          if [ -z "$CS" ]; then
+            echo "::error::No se encontró Eraseunaapp.csproj"; exit 1
+          fi
           DIR=$(dirname "$CS")
-          echo "csproj=$CS"  >> $GITHUB_OUTPUT
-          echo "srcdir=$DIR" >> $GITHUB_OUTPUT
+          echo "csproj=$CS"   >> $GITHUB_OUTPUT
+          echo "srcdir=$DIR"  >> $GITHUB_OUTPUT
           echo "Proyecto: $CS"
+          ls -la "$DIR"
 
+      # 5) Fijar SDK .NET 8 en el código (evita usar .NET 9)
       - name: Pin .NET 8 SDK (global.json)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           cat > global.json <<'JSON'
-          { "sdk": { "version": "8.0.415", "rollForward": "disable" } }
+          {
+            "sdk": {
+              "version": "8.0.415",
+              "rollForward": "disable"
+            }
+          }
           JSON
-          dotnet --info | sed -n '1,40p'
+          dotnet --info | sed -n '1,60p'
 
+      # 6) Workloads MAUI iOS
       - name: Install MAUI workloads (iOS)
         run: |
           set -euo pipefail
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
+          dotnet workload list
 
-      # ✅ PreCheck del icono EXACTAMENTE en Resources/AppIcon/appicon.png y 1024x1024
-      - name: Verify App Icon 1024 (AppIcon/appicon.png)
+      # 7) PreCheck del icono EXACTAMENTE en Resources/AppIcon/appicon.png y 1024x1024
+      - name: Verify App Icon 1024 (Resources/AppIcon/appicon.png)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-          test -d "Resources/AppIcon" || { echo "::error::Falta carpeta Resources/AppIcon"; exit 1; }
           ICON="Resources/AppIcon/appicon.png"
           test -f "$ICON" || { echo "::error::Falta $ICON"; exit 1; }
           W=$(sips -g pixelWidth  "$ICON" | awk '/pixelWidth/{print $2}')
@@ -81,6 +112,7 @@ jobs:
           [ "$W" = "1024" ] && [ "$H" = "1024" ] || { echo "::error::El icono debe ser 1024x1024"; exit 1; }
           echo "✅ Icono OK"
 
+      # 8) Keychain y firma
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -117,7 +149,7 @@ jobs:
           ID="$(security find-identity -v -p codesigning "$KC" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n1)"
           TEAMID="$(echo "$ID" | sed -n 's/.*(\(.*\)).*/\1/p')"
           echo "CODESIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
-          echo "TEAMID=$TEAMID" >> "$GITHUB_ENV"
+          echo "TEAMID=$TEAMID"       >> "$GITHUB_ENV"
           echo "🔐 Cert: $ID | Team: $TEAMID"
 
       - name: Install provisioning profile (App Store)
@@ -136,27 +168,37 @@ jobs:
           echo "PROVISIONING_NAME=$PP_NAME" >> "$GITHUB_ENV"
           echo "📄 Perfil: $PP_NAME ($PP_UUID)"
 
-      - name: Publish (.xcarchive + .ipa)
+      # 9) Publicar, generar .xcarchive y .ipa (bump automático de build number)
+      - name: Publish (.xcarchive) + .ipa
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
           BUILD_NO=$(date -u +%Y%m%d%H%M%S)
           dotnet publish "$(basename "${{ steps.proj.outputs.csproj }}")" \
-            -c ${{ env.CONFIGURATION }} -f net8.0-ios -p:RuntimeIdentifier=${{ env.RUNTIME_IDENTIFIER }} \
-            -p:ArchiveOnBuild=true -p:BuildIpa=true \
+            -c ${{ env.CONFIGURATION }} \
+            -f net8.0-ios \
+            -p:RuntimeIdentifier=${{ env.RUNTIME_IDENTIFIER }} \
+            -p:ArchiveOnBuild=true \
+            -p:BuildIpa=true \
             -p:CFBundleIconName=AppIcon \
-            -p:ApplicationVersion=$BUILD_NO -p:CFBundleVersion=$BUILD_NO \
-            -p:CodesignKey="${{ env.CODESIGN_IDENTITY }}" -p:CodesignTeamId="${{ env.TEAMID }}" \
+            -p:ApplicationVersion=$BUILD_NO \
+            -p:CFBundleVersion=$BUILD_NO \
+            -p:CodesignKey="${{ env.CODESIGN_IDENTITY }}" \
+            -p:CodesignTeamId="${{ env.TEAMID }}" \
             -p:ProvisioningProfileUuid="${{ env.PROVISIONING_UUID }}" \
-            -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
+            -p:TreatWarningsAsErrors=false \
+            -p:NoWarn=NU1605
 
+      # 10) Localizar IPA e inspeccionar Info.plist
       - name: Find IPA & inspect Info.plist
-        id: ipa
+        id: findipa
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
           IPA=$(find "bin/${{ env.CONFIGURATION }}/net8.0-ios/${{ env.RUNTIME_IDENTIFIER }}" -name "*.ipa" -print -quit)
-          [ -n "$IPA" ] || { echo "::warning::No se generó .ipa"; exit 0; }
+          if [ -z "$IPA" ]; then
+            echo "::warning::No se generó .ipa"; exit 0
+          fi
           echo "ipa=$IPA" >> $GITHUB_OUTPUT
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           BUNDLE_ID=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)
@@ -164,15 +206,16 @@ jobs:
           echo "BundleId: $BUNDLE_ID"
           echo "CFBundleIconName: ${ICON_NAME:-<vacío>}"
 
+      # 11) Subir a TestFlight (solo si hay IPA)
       - name: Upload to TestFlight
-        if: ${{ steps.ipa.outputs.ipa != '' }}
+        if: ${{ steps.findipa.outputs.ipa != '' }}
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID:      ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          IPA="${{ steps.ipa.outputs.ipa }}"
+          IPA="${{ steps.findipa.outputs.ipa }}"
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           CONTENT="${APPSTORE_PRIVATE_KEY}"
@@ -185,13 +228,13 @@ jobs:
           xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # ⬇️ Artefactos separados para evitar path vacío
+      # 12) Artefactos — separar para evitar path vacío
       - name: Upload artifact (IPA)
-        if: ${{ steps.ipa.outputs.ipa != '' }}
+        if: ${{ steps.findipa.outputs.ipa != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
-          path: ${{ steps.ipa.outputs.ipa }}
+          path: ${{ steps.findipa.outputs.ipa }}
 
       - name: Upload artifacts (logs/xcarchive) — always
         if: always()
