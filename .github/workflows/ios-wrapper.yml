@@ -49,11 +49,6 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Dotnet info
-        run: |
-          dotnet --info
-          dotnet --list-sdks
-
       - name: Cache NuGet
         uses: actions/cache@v4
         with:
@@ -92,21 +87,76 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # Opción A: iconos autogenerados por MAUI
-      - name: Use MAUI auto-generated icons
+      # ==== ICONOS: catálogo manual en Platforms/iOS ====
+      - name: Synthesize AppIcon (Platforms/iOS/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
           ICON=Resources/AppIcon/appicon.png
           [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
+
+          # limpia catálogos que molesten
           rm -rf Resources/Assets.xcassets || true
           rm -rf Platforms/iOS/Assets.xcassets || true
-          rm -rf bin obj || true
-          CS_BASENAME="$(basename "${{ steps.proj.outputs.csproj }}")"
-          cp "$CS_BASENAME" "$CS_BASENAME.bak"
-          sed -E '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$CS_BASENAME.bak" > "$CS_BASENAME"
 
+          IOS_XC="Platforms/iOS/Assets.xcassets"
+          SET_DIR="$IOS_XC/AppIcon.appiconset"
+          mkdir -p "$SET_DIR"
+
+          # raíz del catálogo
+          cat > "$IOS_XC/Contents.json" <<'JSON'
+          { "info": { "version": 1, "author": "xcode" } }
+          JSON
+
+          gen() { local px="$1" name="$2"; sips -s format png "$ICON" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
+          # iPhone
+          gen 40  "icon-20@2x.png";   gen 60  "icon-20@3x.png"
+          gen 58  "icon-29@2x.png";   gen 87  "icon-29@3x.png"
+          gen 80  "icon-40@2x.png";   gen 120 "icon-40@3x.png"
+          gen 120 "icon-60@2x.png";   gen 180 "icon-60@3x.png"
+          # iPad (incluye 152 requerido)
+          gen 20  "icon-20-ipad.png"; gen 40  "icon-20-ipad@2x.png"
+          gen 29  "icon-29-ipad.png"; gen 58  "icon-29-ipad@2x.png"
+          gen 40  "icon-40-ipad.png"; gen 80  "icon-40-ipad@2x.png"
+          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"    # <-- 152x152
+          gen 167 "icon-83.5@2x.png"
+          # Marketing 1024 (Any Appearance)
+          gen 1024 "icon-marketing.png"
+
+          cat > "$SET_DIR/Contents.json" <<'JSON'
+          {
+            "images": [
+              { "idiom": "iphone", "size": "20x20", "scale": "2x", "filename": "icon-20@2x.png" },
+              { "idiom": "iphone", "size": "20x20", "scale": "3x", "filename": "icon-20@3x.png" },
+              { "idiom": "iphone", "size": "29x29", "scale": "2x", "filename": "icon-29@2x.png" },
+              { "idiom": "iphone", "size": "29x29", "scale": "3x", "filename": "icon-29@3x.png" },
+              { "idiom": "iphone", "size": "40x40", "scale": "2x", "filename": "icon-40@2x.png" },
+              { "idiom": "iphone", "size": "40x40", "scale": "3x", "filename": "icon-40@3x.png" },
+              { "idiom": "iphone", "size": "60x60", "scale": "2x", "filename": "icon-60@2x.png" },
+              { "idiom": "iphone", "size": "60x60", "scale": "3x", "filename": "icon-60@3x.png" },
+
+              { "idiom": "ipad", "size": "20x20", "scale": "1x", "filename": "icon-20-ipad.png" },
+              { "idiom": "ipad", "size": "20x20", "scale": "2x", "filename": "icon-20-ipad@2x.png" },
+              { "idiom": "ipad", "size": "29x29", "scale": "1x", "filename": "icon-29-ipad.png" },
+              { "idiom": "ipad", "size": "29x29", "scale": "2x", "filename": "icon-29-ipad@2x.png" },
+              { "idiom": "ipad", "size": "40x40", "scale": "1x", "filename": "icon-40-ipad.png" },
+              { "idiom": "ipad", "size": "40x40", "scale": "2x", "filename": "icon-40-ipad@2x.png" },
+              { "idiom": "ipad", "size": "76x76", "scale": "1x", "filename": "icon-76.png" },
+              { "idiom": "ipad", "size": "76x76", "scale": "2x", "filename": "icon-76@2x.png" },   // 152x152
+              { "idiom": "ipad", "size": "83.5x83.5", "scale": "2x", "filename": "icon-83.5@2x.png" },
+
+              { "idiom": "ios-marketing", "size": "1024x1024", "scale": "1x", "filename": "icon-marketing.png" }
+            ],
+            "properties": { "preRendered": false },
+            "info": { "version": 1, "author": "xcode" }
+          }
+          JSON
+
+          echo "✅ Catálogo creado en $SET_DIR"
+          ls -la "$SET_DIR"
+
+      # ===== Firma =====
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -155,7 +205,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # >>> Paso actualizado <<<
+      # ===== Build =====
       - name: Restore
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -175,6 +225,7 @@ jobs:
             -p:PublishTrimmed=true \
             -p:CodesignKey="${{ env.CERT_NAME }}" \
             -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
+            -p:CFBundleIconName=AppIcon \        # <-- forzamos icon set
             -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
           echo "Publish OK"
 
@@ -196,8 +247,7 @@ jobs:
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-          ICONNAME="$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin 2>/dev/null || true)"
-          echo "IconName:  ${ICONNAME:-'(no definido por MAUI)'}"
+          echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin)"
 
       - name: Upload to TestFlight
         env:
