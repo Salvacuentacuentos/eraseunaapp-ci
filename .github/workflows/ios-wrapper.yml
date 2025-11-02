@@ -213,21 +213,24 @@ jobs:
           set -euo pipefail
           dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
-      - name: Publish (.xcarchive + .ipa)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        shell: bash
-        run: |
+          - name: Publish (.xcarchive + .ipa)
+          working-directory: ${{ steps.proj.outputs.srcdir }}
+          shell: bash
+          run: |
           set -euo pipefail
-          dotnet publish "$(basename "${{ steps.proj.outputs.csproj }}")" \
-            -c Release -f net8.0-ios \
-            -p:RuntimeIdentifier=ios-arm64 \
-            -p:ArchiveOnBuild=true -p:BuildIpa=true \
-            -p:PublishTrimmed=true \
-            -p:CodesignKey="${{ env.CERT_NAME }}" \
-            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
-            -p:CFBundleIconName=AppIcon \        # <-- forzamos icon set
-            -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
-          echo "Publish OK"
+          PROJ="$(basename "${{ steps.proj.outputs.csproj }}")"
+          dotnet publish "$PROJ" \
+          -c Release -f net8.0-ios \
+          -p:RuntimeIdentifier=ios-arm64 \
+          -p:ArchiveOnBuild=true \
+          -p:BuildIpa=true \
+          -p:PublishTrimmed=true \
+          -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
+          -p:CFBundleIconName=AppIcon \
+          -p:TreatWarningsAsErrors=false \
+          -p:NoWarn=NU1605
+           echo "Publish OK"
+
 
       - name: Find IPA
         id: findipa
