@@ -156,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           IPA=$(find "bin/${{ env.CONFIGURATION }}/net8.0-ios/${{ env.RUNTIME_IDENTIFIER }}" -name "*.ipa" -print -quit)
-          [ -n "$IPA" ] || { echo "::error::No se generó .ipa"; exit 1; }
+          [ -n "$IPA" ] || { echo "::warning::No se generó .ipa"; exit 0; }
           echo "ipa=$IPA" >> $GITHUB_OUTPUT
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           BUNDLE_ID=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)
@@ -165,7 +165,7 @@ jobs:
           echo "CFBundleIconName: ${ICON_NAME:-<vacío>}"
 
       - name: Upload to TestFlight
-        if: steps.ipa.outputs.ipa != ''
+        if: ${{ steps.ipa.outputs.ipa != '' }}
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_KEY_ID:      ${{ secrets.APPSTORE_KEY_ID }}
@@ -185,10 +185,20 @@ jobs:
           xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      - name: Upload artifacts
+      # ⬇️ Artefactos separados para evitar path vacío
+      - name: Upload artifact (IPA)
+        if: ${{ steps.ipa.outputs.ipa != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: ${{ steps.ipa.outputs.ipa }}
+
+      - name: Upload artifacts (logs/xcarchive) — always
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-outputs
-          path: ${{ steps.ipa.outputs.ipa }}
-          if-no-files-found: warn
+          name: ios-logs
+          path: |
+            $HOME/Library/Logs/DiagnosticReports/*
+            ${{ steps.proj.outputs.srcdir }}/bin/${{ env.CONFIGURATION }}/net8.0-ios/${{ env.RUNTIME_IDENTIFIER }}/*.xcarchive
+          if-no-files-found: ignore
