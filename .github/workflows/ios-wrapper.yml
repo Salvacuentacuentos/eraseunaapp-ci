@@ -12,7 +12,7 @@ permissions:
 
 env:
   DOTNET_VERSION: 8.0.415
-  XCODE_VERSION: "16.1"            # SDK iOS 18 (Xcode 16.1)
+  XCODE_VERSION: "16.1"
   CONFIGURATION: Release
   RUNTIME_IDENTIFIER: ios-arm64
 
@@ -28,7 +28,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Salvacuentacuentos/Eraseunaapp
-          # ref: master
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
@@ -186,13 +185,17 @@ jobs:
           if [ -z "$IPA" ]; then
             echo "::error::No se encontró ningún .ipa en bin/${{ env.CONFIGURATION }}/net8.0-ios/${{ env.RUNTIME_IDENTIFIER }}"; exit 1
           fi
-          echo "ipa=$IPA" >> $GITHUB_OUTPUT
-          echo "✅ IPA => $IPA"
-          PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
+          # Convertir a ruta ABSOLUTA para poder usarla fuera del working-directory
+          case "$IPA" in
+            /*) ABS="$IPA" ;;
+            *)  ABS="$PWD/$IPA" ;;
+          esac
+          echo "ipa=$ABS" >> $GITHUB_OUTPUT
+          echo "✅ IPA => $ABS"
+          PLIST_XML="$(unzip -p "$ABS" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           echo "BundleId: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName: $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
-      # ✅ FIX: usar el mismo working-directory del proyecto
       - name: Upload to TestFlight
         if: steps.findipa.outputs.ipa != ''
         working-directory: ${{ steps.proj.outputs.srcdir }}
@@ -220,10 +223,8 @@ jobs:
           echo "⬆️ Subiendo IPA: $IPA"
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # ✅ FIX: artifacts desde la carpeta del proyecto
       - name: Upload artifact (IPA)
         if: steps.findipa.outputs.ipa != ''
-        working-directory: ${{ steps.proj.outputs.srcdir }}
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
