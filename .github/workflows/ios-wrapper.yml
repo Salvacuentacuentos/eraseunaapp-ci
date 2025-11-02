@@ -89,7 +89,7 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 4) Catálogo AppIcon en Resources/Assets.xcassets (152 iPad + 1024 marketing)
+      # 4) Catálogo AppIcon en Resources/Assets.xcassets (iPad 152 + ios-marketing 1024)
       - name: Synthesize AppIcon (Resources/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -98,10 +98,12 @@ jobs:
           ICON=Resources/AppIcon/appicon.png
           [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
           rm -rf Resources/Assets.xcassets Platforms/iOS/Assets.xcassets || true
+
           XC="Resources/Assets.xcassets"
           SET="$XC/AppIcon.appiconset"
           mkdir -p "$SET"
           printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$XC/Contents.json"
+
           gen(){ sips -s format png "$ICON" --resampleWidth "$1" --out "$SET/$2" >/dev/null; }
           # iPhone
           gen 40  icon-20@2x.png;  gen 60  icon-20@3x.png
@@ -116,6 +118,7 @@ jobs:
           gen 167 icon-83.5@2x.png
           # Marketing
           gen 1024 icon-marketing.png
+
           cat > "$SET/Contents.json" <<'JSON'
           {
             "images": [
@@ -156,7 +159,8 @@ jobs:
 
       # 6) Firma (keychain + p12 + provisioning)
       - name: Create & unlock keychain
-        env: { KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }} }
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -189,7 +193,8 @@ jobs:
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
 
       - name: Install provisioning profile (App Store)
-        env: { IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }} }
+        env:
+          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -257,7 +262,9 @@ jobs:
 
           # Entitlements actuales (para re-firmar igual)
           ENT="$RUNNER_TEMP/ents.plist"
-          if ! codesign -d --entitlements :- "$APP_PATH" > "$ENT" 2>/dev/null; then
+          if codesign -d --entitlements :- "$APP_PATH" > "$ENT" 2>/dev/null; then
+            :
+          else
             echo "⚠️ No se pudieron extraer entitlements; se firmará sin plist explícito."
             ENT=""
           fi
