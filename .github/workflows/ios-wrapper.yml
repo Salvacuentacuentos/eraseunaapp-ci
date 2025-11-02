@@ -70,8 +70,7 @@ jobs:
           DIR=$(dirname "$CS")
           echo "csproj=$CS"  >> $GITHUB_OUTPUT
           echo "srcdir=$DIR" >> $GITHUB_OUTPUT
-          echo "Proyecto: $CS"
-          echo "Carpeta:  $DIR"
+          echo "Proyecto: $CS"; echo "Carpeta: $DIR"
 
       - name: Pin .NET 8 SDK (global.json)
         working-directory: ${{ steps.proj.outputs.srcdir }}
@@ -90,7 +89,7 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 4) ICONOS: catálogo manual en Resources/Assets.xcassets (incluye 152 iPad y 1024 marketing)
+      # 4) Catálogo AppIcon en Resources/Assets.xcassets (152 iPad + 1024 marketing)
       - name: Synthesize AppIcon (Resources/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -98,81 +97,66 @@ jobs:
           set -euo pipefail
           ICON=Resources/AppIcon/appicon.png
           [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
-
-          # Evitar colisiones
           rm -rf Resources/Assets.xcassets Platforms/iOS/Assets.xcassets || true
-
           XC="Resources/Assets.xcassets"
-          SET_DIR="$XC/AppIcon.appiconset"
-          mkdir -p "$SET_DIR"
-
-          # Raíz del catálogo
+          SET="$XC/AppIcon.appiconset"
+          mkdir -p "$SET"
           printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$XC/Contents.json"
-
-          gen() { local px="$1" name="$2"; sips -s format png "$ICON" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
+          gen(){ sips -s format png "$ICON" --resampleWidth "$1" --out "$SET/$2" >/dev/null; }
           # iPhone
-          gen 40  "icon-20@2x.png";   gen 60  "icon-20@3x.png"
-          gen 58  "icon-29@2x.png";   gen 87  "icon-29@3x.png"
-          gen 80  "icon-40@2x.png";   gen 120 "icon-40@3x.png"
-          gen 120 "icon-60@2x.png";   gen 180 "icon-60@3x.png"
-          # iPad (incluye 152 requerido)
-          gen 20  "icon-20-ipad.png"; gen 40  "icon-20-ipad@2x.png"
-          gen 29  "icon-29-ipad.png"; gen 58  "icon-29-ipad@2x.png"
-          gen 40  "icon-40-ipad.png"; gen 80  "icon-40-ipad@2x.png"
-          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"
-          gen 167 "icon-83.5@2x.png"
-          # Marketing 1024
-          gen 1024 "icon-marketing.png"
-
-          cat > "$SET_DIR/Contents.json" <<'JSON'
+          gen 40  icon-20@2x.png;  gen 60  icon-20@3x.png
+          gen 58  icon-29@2x.png;  gen 87  icon-29@3x.png
+          gen 80  icon-40@2x.png;  gen 120 icon-40@3x.png
+          gen 120 icon-60@2x.png;  gen 180 icon-60@3x.png
+          # iPad (incluye 152)
+          gen 20  icon-20-ipad.png;   gen 40  icon-20-ipad@2x.png
+          gen 29  icon-29-ipad.png;   gen 58  icon-29-ipad@2x.png
+          gen 40  icon-40-ipad.png;   gen 80  icon-40-ipad@2x.png
+          gen 76  icon-76.png;        gen 152 icon-76@2x.png
+          gen 167 icon-83.5@2x.png
+          # Marketing
+          gen 1024 icon-marketing.png
+          cat > "$SET/Contents.json" <<'JSON'
           {
             "images": [
-              { "idiom": "iphone", "size": "20x20", "scale": "2x", "filename": "icon-20@2x.png" },
-              { "idiom": "iphone", "size": "20x20", "scale": "3x", "filename": "icon-20@3x.png" },
-              { "idiom": "iphone", "size": "29x29", "scale": "2x", "filename": "icon-29@2x.png" },
-              { "idiom": "iphone", "size": "29x29", "scale": "3x", "filename": "icon-29@3x.png" },
-              { "idiom": "iphone", "size": "40x40", "scale": "2x", "filename": "icon-40@2x.png" },
-              { "idiom": "iphone", "size": "40x40", "scale": "3x", "filename": "icon-40@3x.png" },
-              { "idiom": "iphone", "size": "60x60", "scale": "2x", "filename": "icon-60@2x.png" },
-              { "idiom": "iphone", "size": "60x60", "scale": "3x", "filename": "icon-60@3x.png" },
-
-              { "idiom": "ipad", "size": "20x20", "scale": "1x", "filename": "icon-20-ipad.png" },
-              { "idiom": "ipad", "size": "20x20", "scale": "2x", "filename": "icon-20-ipad@2x.png" },
-              { "idiom": "ipad", "size": "29x29", "scale": "1x", "filename": "icon-29-ipad.png" },
-              { "idiom": "ipad", "size": "29x29", "scale": "2x", "filename": "icon-29-ipad@2x.png" },
-              { "idiom": "ipad", "size": "40x40", "scale": "1x", "filename": "icon-40-ipad.png" },
-              { "idiom": "ipad", "size": "40x40", "scale": "2x", "filename": "icon-40-ipad@2x.png" },
-              { "idiom": "ipad", "size": "76x76", "scale": "1x", "filename": "icon-76.png" },
-              { "idiom": "ipad", "size": "76x76", "scale": "2x", "filename": "icon-76@2x.png" },
-              { "idiom": "ipad", "size": "83.5x83.5", "scale": "2x", "filename": "icon-83.5@2x.png" },
-
-              { "idiom": "ios-marketing", "size": "1024x1024", "scale": "1x", "filename": "icon-marketing.png" }
+              {"idiom":"iphone","size":"20x20","scale":"2x","filename":"icon-20@2x.png"},
+              {"idiom":"iphone","size":"20x20","scale":"3x","filename":"icon-20@3x.png"},
+              {"idiom":"iphone","size":"29x29","scale":"2x","filename":"icon-29@2x.png"},
+              {"idiom":"iphone","size":"29x29","scale":"3x","filename":"icon-29@3x.png"},
+              {"idiom":"iphone","size":"40x40","scale":"2x","filename":"icon-40@2x.png"},
+              {"idiom":"iphone","size":"40x40","scale":"3x","filename":"icon-40@3x.png"},
+              {"idiom":"iphone","size":"60x60","scale":"2x","filename":"icon-60@2x.png"},
+              {"idiom":"iphone","size":"60x60","scale":"3x","filename":"icon-60@3x.png"},
+              {"idiom":"ipad","size":"20x20","scale":"1x","filename":"icon-20-ipad.png"},
+              {"idiom":"ipad","size":"20x20","scale":"2x","filename":"icon-20-ipad@2x.png"},
+              {"idiom":"ipad","size":"29x29","scale":"1x","filename":"icon-29-ipad.png"},
+              {"idiom":"ipad","size":"29x29","scale":"2x","filename":"icon-29-ipad@2x.png"},
+              {"idiom":"ipad","size":"40x40","scale":"1x","filename":"icon-40-ipad.png"},
+              {"idiom":"ipad","size":"40x40","scale":"2x","filename":"icon-40-ipad@2x.png"},
+              {"idiom":"ipad","size":"76x76","scale":"1x","filename":"icon-76.png"},
+              {"idiom":"ipad","size":"76x76","scale":"2x","filename":"icon-76@2x.png"},
+              {"idiom":"ipad","size":"83.5x83.5","scale":"2x","filename":"icon-83.5@2x.png"},
+              {"idiom":"ios-marketing","size":"1024x1024","scale":"1x","filename":"icon-marketing.png"}
             ],
-            "info": { "version": 1, "author": "xcode" }
+            "info":{"version":1,"author":"xcode"}
           }
           JSON
+          ls -la "$SET"
 
-          echo "✅ Catálogo creado en $SET_DIR"
-          ls -la "$SET_DIR"
-
-      # 5) Desactivar generación automática de iconos de MAUI (evitar conflictos)
+      # 5) Neutraliza <MauiIcon> y CFBundleIconName antiguos en el runner
       - name: Disable MAUI auto icon generation (edit csproj in runner)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-          CS="${{ steps.proj.outputs.csproj }}"
-          CS_BN="${CS##*/}"
-          cp "$CS_BN" "$CS_BN.bak"
-          # quita cualquier <MauiIcon ...> del csproj (solo en este runner)
-          sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$CS_BN.bak" > "$CS_BN" || true
-          # elimina CFBundleIconName antiguo para forzarlo por MSBuild
-          sed -E -i '' '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$CS_BN" || true
+          CS="${{ steps.proj.outputs.csproj }}"; BN="${CS##*/}"
+          cp "$BN" "$BN.bak"
+          sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$BN.bak" > "$BN" || true
+          sed -E -i '' '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$BN" || true
 
       # 6) Firma (keychain + p12 + provisioning)
       - name: Create & unlock keychain
-        env:
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        env: { KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }} }
         shell: bash
         run: |
           set -euo pipefail
@@ -205,8 +189,7 @@ jobs:
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
 
       - name: Install provisioning profile (App Store)
-        env:
-          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
+        env: { IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }} }
         shell: bash
         run: |
           set -euo pipefail
@@ -218,7 +201,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 7) Restore (usa global.json del srcdir)
+      # 7) Restore (.NET 8)
       - name: Restore
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -226,42 +209,29 @@ jobs:
           set -euo pipefail
           dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
-      # 8) Identidades de firma (debug)
-      - name: Show code signing identities (debug)
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Default keychain:"; security default-keychain
-          echo "Search list:";     security list-keychains -d user
-          echo "Identities in our temp keychain:"; security find-identity -v -p codesigning "${KEYCHAIN_PATH}" || true
-
-      # 9) Publish (.xcarchive + .ipa) – fuerza asset catalogs + CFBundleIconName
+      # 8) Publicar (firma) – forzamos CFBundleIconName=AppIcon
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-          PROJ="${{ steps.proj.outputs.csproj }}"
-          PROJ_NAME="${PROJ##*/}"
-          echo "Publicando: $PROJ_NAME"
-          echo "Usando cert: ${CERT_NAME}"
+          PROJ="${{ steps.proj.outputs.csproj }}"; NAME="${PROJ##*/}"
+          echo "Publicando: $NAME"
           dotnet workload restore
-          dotnet publish "$PROJ_NAME" \
+          dotnet publish "$NAME" \
             -c Release -f net8.0-ios \
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
             -p:PublishTrimmed=true \
-            -p:AssetCatalogs=Resources/Assets.xcassets \
             -p:CFBundleIconName=AppIcon \
             -p:CodesignKey="${CERT_NAME}" \
             -p:CodesignKeychain="${KEYCHAIN_PATH}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
+            -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
           echo "Publish OK"
 
-      # 10) Localizar IPA
+      # 9) Localizar IPA original
       - name: Find IPA
         id: findipa
         shell: bash
@@ -273,17 +243,66 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 11) Verificar que el Assets.car contiene ios-marketing (1024)
+      # 10) PARCHE: compilar Assets.car dentro de la .app y RE-FIRMAR, luego re-empaquetar IPA
+      - name: Patch IPA with asset catalog + resign
+        id: patchipa
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA_IN="${{ steps.findipa.outputs.ipa }}"
+          APPBASE="$(mktemp -d)"
+          unzip -q "$IPA_IN" -d "$APPBASE"
+          APP_PATH="$(ls "$APPBASE"/Payload/*.app)"
+          echo "App => $APP_PATH"
+
+          # Entitlements actuales (para re-firmar igual)
+          ENT="$RUNNER_TEMP/ents.plist"
+          if ! codesign -d --entitlements :- "$APP_PATH" > "$ENT" 2>/dev/null; then
+            echo "⚠️ No se pudieron extraer entitlements; se firmará sin plist explícito."
+            ENT=""
+          fi
+
+          # Compilar catálogo de assets al interior de la app
+          ASSETS="${{ steps.proj.outputs.srcdir }}/Resources/Assets.xcassets"
+          [ -d "$ASSETS" ] || { echo "❌ No existe $ASSETS"; exit 1; }
+          xcrun actool "$ASSETS" \
+            --compile "$APP_PATH" \
+            --platform iphoneos \
+            --minimum-deployment-target 12.0 \
+            --app-icon AppIcon \
+            --output-partial-info-plist "$RUNNER_TEMP/asset-partial.plist"
+
+          # Re-firmar frameworks embebidos (si hubiera)
+          if ls "$APP_PATH"/Frameworks/* 1>/dev/null 2>&1; then
+            find "$APP_PATH/Frameworks" -maxdepth 1 -type d | while read F; do
+              xcrun codesign --force --keychain "${KEYCHAIN_PATH}" --sign "${CERT_NAME}" "$F"
+            done
+          fi
+
+          # Re-firmar app (usa entitlements si existen)
+          if [ -n "$ENT" ]; then
+            xcrun codesign --force --keychain "${KEYCHAIN_PATH}" --sign "${CERT_NAME}" --options runtime --entitlements "$ENT" "$APP_PATH"
+          else
+            xcrun codesign --force --keychain "${KEYCHAIN_PATH}" --sign "${CERT_NAME}" --options runtime "$APP_PATH"
+          fi
+
+          # Re-empacar IPA
+          NEWIPA="$RUNNER_TEMP/Eraseunaapp_resigned.ipa"
+          (cd "$APPBASE" && zip -qry "$NEWIPA" Payload)
+          echo "ipa=$NEWIPA" >> $GITHUB_OUTPUT
+          echo "Patched IPA => $NEWIPA"
+
+      # 11) Verificar que ahora existe Assets.car y contiene ios-marketing
       - name: Verify compiled asset catalog (ios-marketing)
         shell: bash
         run: |
           set -euo pipefail
-          IPA="${{ steps.findipa.outputs.ipa }}"
+          IPA="${{ steps.patchipa.outputs.ipa }}"
           APPDIR="$(mktemp -d)"
           unzip -q "$IPA" -d "$APPDIR"
           CAR="$(ls "$APPDIR"/Payload/*.app/Assets.car || true)"
           if [ -z "$CAR" ]; then
-            echo "❌ No se encontró Assets.car en el bundle. Listado de la app:"
+            echo "❌ No se encontró Assets.car en el bundle. Contenido:"
             ls -la "$APPDIR"/Payload/*.app
             exit 1
           fi
@@ -296,12 +315,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IPA="${{ steps.findipa.outputs.ipa }}"
+          IPA="${{ steps.patchipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin)"
 
-      # 13) Subida TestFlight
+      # 13) Subida TestFlight (usa IPA parchada)
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -310,7 +329,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IPA="${{ steps.findipa.outputs.ipa }}"
+          IPA="${{ steps.patchipa.outputs.ipa }}"
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEYFILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           CONTENT="${APPSTORE_PRIVATE_KEY}"
@@ -323,12 +342,12 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 14) Artefactos
+      # 14) Artefactos (IPA final + logs)
       - name: Upload artifact (IPA)
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
-          path: ${{ steps.findipa.outputs.ipa }}
+          path: ${{ steps.patchipa.outputs.ipa }}
 
       - name: Upload build logs
         if: always()
