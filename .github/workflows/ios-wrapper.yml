@@ -12,7 +12,7 @@ permissions:
 
 env:
   DOTNET_VERSION: 8.0.415
-  XCODE_VERSION: "16.1"         # SDK iOS 18
+  XCODE_VERSION: "16.1"
   CONFIGURATION: Release
   RUNTIME_IDENTIFIER: ios-arm64
 
@@ -42,8 +42,8 @@ jobs:
       - name: Point .NET to selected Xcode (DEVELOPER_DIR & MD_APPLE_SDK_ROOT)
         run: |
           set -euo pipefail
-          XCODE_DEV="$(xcode-select -p)"                         # /Applications/Xcode_16.1.app/Contents/Developer
-          XCODE_APP="$(dirname "$(dirname "$XCODE_DEV")")"       # /Applications/Xcode_16.1.app
+          XCODE_DEV="$(xcode-select -p)"
+          XCODE_APP="$(dirname "$(dirname "$XCODE_DEV")")"
           echo "DEVELOPER_DIR=$XCODE_DEV"     >> "$GITHUB_ENV"
           echo "MD_APPLE_SDK_ROOT=$XCODE_APP" >> "$GITHUB_ENV"
           xcodebuild -version
@@ -76,29 +76,27 @@ jobs:
           echo "Proyecto: $CS"
           ls -la "$DIR"
 
-      # 5) Fijar SDK .NET 8 en el código (evita usar .NET 9)
+      # 5) Pin .NET 8 en el repo del proyecto
       - name: Pin .NET 8 SDK (global.json)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           cat > global.json <<'JSON'
           {
-            "sdk": {
-              "version": "8.0.415",
-              "rollForward": "disable"
-            }
+            "sdk": { "version": "8.0.415", "rollForward": "disable" }
           }
           JSON
           dotnet --info | sed -n '1,60p'
 
-      # 6) Workloads MAUI iOS
+      # 6) Workloads MAUI iOS (ahora en la carpeta del proyecto y apuntando al csproj)
       - name: Install MAUI workloads (iOS)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
           set -euo pipefail
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
-          dotnet workload restore
+          dotnet workload restore "${{ steps.proj.outputs.csproj }}"
           dotnet workload list
 
-      # 7) PreCheck del icono EXACTAMENTE en Resources/AppIcon/appicon.png y 1024x1024
+      # 7) PreCheck del icono 1024x1024
       - name: Verify App Icon 1024 (Resources/AppIcon/appicon.png)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -168,7 +166,7 @@ jobs:
           echo "PROVISIONING_NAME=$PP_NAME" >> "$GITHUB_ENV"
           echo "📄 Perfil: $PP_NAME ($PP_UUID)"
 
-      # 9) Publicar, generar .xcarchive y .ipa (bump automático de build number)
+      # 9) Publicar, generar .xcarchive y .ipa (build number auto)
       - name: Publish (.xcarchive) + .ipa
         working-directory: ${{ steps.proj.outputs.srcdir }}
         run: |
@@ -228,7 +226,7 @@ jobs:
           xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 12) Artefactos — separar para evitar path vacío
+      # 12) Artefactos
       - name: Upload artifact (IPA)
         if: ${{ steps.findipa.outputs.ipa != '' }}
         uses: actions/upload-artifact@v4
