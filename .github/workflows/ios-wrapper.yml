@@ -275,6 +275,30 @@ jobs:
             --app-icon AppIcon \
             --output-partial-info-plist "$OUT_DIR/partial.plist"
 
+           - name: Patch IPA with asset catalog + resign (safe, ditto)
+           id: patchipa
+           shell: bash
+           run: |
+          set -euo pipefail
+          IPA_IN="${{ steps.findipa.outputs.ipa }}"
+          WORK_DIR="$(mktemp -d)"
+          unzip -q "$IPA_IN" -d "$WORK_DIR"
+          APP_PATH="$(ls "$WORK_DIR"/Payload/*.app)"
+          echo "App => $APP_PATH"
+
+          ASSETS_DIR="${{ steps.proj.outputs.srcdir }}/Resources/Assets.xcassets"
+          [ -d "$ASSETS_DIR" ] || { echo "❌ No existe $ASSETS_DIR"; exit 1; }
+
+          OUT_DIR="$(mktemp -d)"
+          xcrun actool "$ASSETS_DIR" \
+            --compile "$OUT_DIR" \
+            --platform iphoneos \
+            --target-device iphone \
+            --target-device ipad \
+            --minimum-deployment-target 12.0 \
+            --app-icon AppIcon \
+            --output-partial-info-plist "$OUT_DIR/partial.plist"
+
           [ -s "$OUT_DIR/Assets.car" ] || { echo "❌ actool no generó Assets.car"; ls -la "$OUT_DIR"; cat "$OUT_DIR/partial.plist" || true; exit 1; }
           cp -f "$OUT_DIR/Assets.car" "$APP_PATH/Assets.car"
           echo "✅ Copiado Assets.car a la app."
@@ -287,10 +311,12 @@ jobs:
           xcrun codesign --force --deep --keychain "${KEYCHAIN_PATH}" \
             --sign "${CERT_NAME}" --options runtime $ENT_FLAG "$APP_PATH"
 
+          # Empaquetar IPA con 'ditto' (evita 'name too long' de zip)
           NEWIPA="$RUNNER_TEMP/Eraseunaapp_resigned.ipa"
-          (cd "$WORK_DIR" && zip -qry "$NEWIPA" Payload)
+          xcrun ditto -c -k --sequesterRsrc --keepParent "$WORK_DIR/Payload" "$NEWIPA"
           echo "ipa=$NEWIPA" >> $GITHUB_OUTPUT
           echo "Patched IPA => $NEWIPA"
+
 
       # 11) Verificar que ahora existe Assets.car y contiene ios-marketing
       - name: Verify compiled asset catalog (ios-marketing)
