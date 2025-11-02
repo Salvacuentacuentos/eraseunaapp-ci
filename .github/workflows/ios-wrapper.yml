@@ -250,7 +250,7 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 10) PARCHE seguro: compilar Assets.car fuera, copiar y re-firmar con --deep
+      # 10) PARCHE: compilar Assets.car FUERA, copiar y re-firmar con --deep (incluye --output-partial-info-plist)
       - name: Patch IPA with asset catalog + resign (safe)
         id: patchipa
         shell: bash
@@ -269,10 +269,13 @@ jobs:
           xcrun actool "$ASSETS_DIR" \
             --compile "$OUT_DIR" \
             --platform iphoneos \
+            --target-device iphone \
+            --target-device ipad \
             --minimum-deployment-target 12.0 \
-            --app-icon AppIcon
+            --app-icon AppIcon \
+            --output-partial-info-plist "$OUT_DIR/partial.plist"
 
-          [ -s "$OUT_DIR/Assets.car" ] || { echo "❌ actool no generó Assets.car"; ls -la "$OUT_DIR"; exit 1; }
+          [ -s "$OUT_DIR/Assets.car" ] || { echo "❌ actool no generó Assets.car"; ls -la "$OUT_DIR"; cat "$OUT_DIR/partial.plist" || true; exit 1; }
           cp -f "$OUT_DIR/Assets.car" "$APP_PATH/Assets.car"
           echo "✅ Copiado Assets.car a la app."
 
