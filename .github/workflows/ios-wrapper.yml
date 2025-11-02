@@ -275,10 +275,10 @@ jobs:
             --app-icon AppIcon \
             --output-partial-info-plist "$OUT_DIR/partial.plist"
 
-           - name: Patch IPA with asset catalog + resign (safe, ditto)
-           id: patchipa
-           shell: bash
-           run: |
+                 - name: Patch IPA with asset catalog + resign (safe, ditto)
+                 id: patchipa
+                shell: bash
+                run: |
           set -euo pipefail
           IPA_IN="${{ steps.findipa.outputs.ipa }}"
           WORK_DIR="$(mktemp -d)"
@@ -299,7 +299,17 @@ jobs:
             --app-icon AppIcon \
             --output-partial-info-plist "$OUT_DIR/partial.plist"
 
-          [ -s "$OUT_DIR/Assets.car" ] || { echo "❌ actool no generó Assets.car"; ls -la "$OUT_DIR"; cat "$OUT_DIR/partial.plist" || true; exit 1; }
+          if [ ! -s "$OUT_DIR/Assets.car" ]; then
+            echo "❌ actool no generó Assets.car"
+            echo "Contenido OUT_DIR:"
+            ls -la "$OUT_DIR" || true
+            if [ -f "$OUT_DIR/partial.plist" ]; then
+              echo "---- partial.plist ----"
+              cat "$OUT_DIR/partial.plist" || true
+            fi
+            exit 1
+          fi
+
           cp -f "$OUT_DIR/Assets.car" "$APP_PATH/Assets.car"
           echo "✅ Copiado Assets.car a la app."
 
@@ -311,10 +321,9 @@ jobs:
           xcrun codesign --force --deep --keychain "${KEYCHAIN_PATH}" \
             --sign "${CERT_NAME}" --options runtime $ENT_FLAG "$APP_PATH"
 
-          # Empaquetar IPA con 'ditto' (evita 'name too long' de zip)
           NEWIPA="$RUNNER_TEMP/Eraseunaapp_resigned.ipa"
           xcrun ditto -c -k --sequesterRsrc --keepParent "$WORK_DIR/Payload" "$NEWIPA"
-          echo "ipa=$NEWIPA" >> $GITHUB_OUTPUT
+          echo "ipa=$NEWIPA" >> "$GITHUB_OUTPUT"
           echo "Patched IPA => $NEWIPA"
 
 
