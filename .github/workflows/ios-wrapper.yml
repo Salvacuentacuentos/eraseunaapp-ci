@@ -90,8 +90,8 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 4) ICONOS: catálogo manual en Platforms/iOS (incluye 152 iPad y 1024 marketing)
-      - name: Synthesize AppIcon (Platforms/iOS/Assets.xcassets)
+      # 4) ICONOS: catálogo manual en Resources/Assets.xcassets (incluye 152 iPad y 1024 marketing)
+      - name: Synthesize AppIcon (Resources/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
@@ -102,12 +102,12 @@ jobs:
           # Evitar colisiones
           rm -rf Resources/Assets.xcassets Platforms/iOS/Assets.xcassets || true
 
-          IOS_XC="Platforms/iOS/Assets.xcassets"
-          SET_DIR="$IOS_XC/AppIcon.appiconset"
+          XC="Resources/Assets.xcassets"
+          SET_DIR="$XC/AppIcon.appiconset"
           mkdir -p "$SET_DIR"
 
           # Raíz del catálogo
-          printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$IOS_XC/Contents.json"
+          printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$XC/Contents.json"
 
           gen() { local px="$1" name="$2"; sips -s format png "$ICON" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
           # iPhone
@@ -252,7 +252,7 @@ jobs:
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
             -p:PublishTrimmed=true \
-            -p:AssetCatalogs=Platforms/iOS/Assets.xcassets \
+            -p:AssetCatalogs=Resources/Assets.xcassets \
             -p:CFBundleIconName=AppIcon \
             -p:CodesignKey="${CERT_NAME}" \
             -p:CodesignKeychain="${KEYCHAIN_PATH}" \
@@ -281,7 +281,12 @@ jobs:
           IPA="${{ steps.findipa.outputs.ipa }}"
           APPDIR="$(mktemp -d)"
           unzip -q "$IPA" -d "$APPDIR"
-          CAR="$(ls "$APPDIR"/Payload/*.app/Assets.car)"
+          CAR="$(ls "$APPDIR"/Payload/*.app/Assets.car || true)"
+          if [ -z "$CAR" ]; then
+            echo "❌ No se encontró Assets.car en el bundle. Listado de la app:"
+            ls -la "$APPDIR"/Payload/*.app
+            exit 1
+          fi
           echo "Assets.car => $CAR"
           xcrun assetutil --info "$CAR" | grep -i '"idiom" *: *"ios-marketing"' -A2 || { echo "❌ ios-marketing no encontrado en Assets.car"; exit 1; }
           echo "✅ ios-marketing presente en Assets.car"
