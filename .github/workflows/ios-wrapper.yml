@@ -119,7 +119,7 @@ jobs:
           gen 20  "icon-20-ipad.png"; gen 40  "icon-20-ipad@2x.png"
           gen 29  "icon-29-ipad.png"; gen 58  "icon-29-ipad@2x.png"
           gen 40  "icon-40-ipad.png"; gen 80  "icon-40-ipad@2x.png"
-          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"   # 152x152
+          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"
           gen 167 "icon-83.5@2x.png"
           # Marketing 1024
           gen 1024 "icon-marketing.png"
@@ -155,7 +155,21 @@ jobs:
           echo "✅ Catálogo creado en $SET_DIR"
           ls -la "$SET_DIR"
 
-      # 5) Firma (keychain + p12 + provisioning)
+      # 5) Desactivar generación automática de iconos de MAUI (evitar conflictos)
+      - name: Disable MAUI auto icon generation (edit csproj in runner)
+        working-directory: ${{ steps.proj.outputs.srcdir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CS="${{ steps.proj.outputs.csproj }}"
+          CS_BN="${CS##*/}"
+          cp "$CS_BN" "$CS_BN.bak"
+          # quita cualquier <MauiIcon ...> del csproj (solo en este runner)
+          sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$CS_BN.bak" > "$CS_BN" || true
+          # elimina CFBundleIconName antiguo para forzarlo por MSBuild
+          sed -E -i '' '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$CS_BN" || true
+
+      # 6) Firma (keychain + p12 + provisioning)
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -204,7 +218,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 6) Restore (usa global.json del srcdir)
+      # 7) Restore (usa global.json del srcdir)
       - name: Restore
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -212,19 +226,16 @@ jobs:
           set -euo pipefail
           dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
-      # 7) Mostrar identidades disponibles (debug)
+      # 8) Identidades de firma (debug)
       - name: Show code signing identities (debug)
         shell: bash
         run: |
           set -euo pipefail
-          echo "Default keychain:"
-          security default-keychain
-          echo "Search list:"
-          security list-keychains -d user
-          echo "Identities in our temp keychain:"
-          security find-identity -v -p codesigning "${KEYCHAIN_PATH}" || true
+          echo "Default keychain:"; security default-keychain
+          echo "Search list:";     security list-keychains -d user
+          echo "Identities in our temp keychain:"; security find-identity -v -p codesigning "${KEYCHAIN_PATH}" || true
 
-      # 8) Publish (.xcarchive + .ipa) con firma explícita
+      # 9) Publish (.xcarchive + .ipa) – fuerza asset catalogs + CFBundleIconName
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -233,27 +244,24 @@ jobs:
           PROJ="${{ steps.proj.outputs.csproj }}"
           PROJ_NAME="${PROJ##*/}"
           echo "Publicando: $PROJ_NAME"
-          echo "Usando keychain: ${KEYCHAIN_PATH}"
           echo "Usando cert: ${CERT_NAME}"
-
           dotnet workload restore
-
           dotnet publish "$PROJ_NAME" \
             -c Release -f net8.0-ios \
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
             -p:PublishTrimmed=true \
-            -p:ProvisioningProfileUuid="${PP_UUID}" \
+            -p:AssetCatalogs=Platforms/iOS/Assets.xcassets \
             -p:CFBundleIconName=AppIcon \
             -p:CodesignKey="${CERT_NAME}" \
             -p:CodesignKeychain="${KEYCHAIN_PATH}" \
+            -p:ProvisioningProfileUuid="${PP_UUID}" \
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
-
           echo "Publish OK"
 
-      # 9) Localizar IPA
+      # 10) Localizar IPA
       - name: Find IPA
         id: findipa
         shell: bash
@@ -265,7 +273,20 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 10) Comprobación dentro del IPA
+      # 11) Verificar que el Assets.car contiene ios-marketing (1024)
+      - name: Verify compiled asset catalog (ios-marketing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          APPDIR="$(mktemp -d)"
+          unzip -q "$IPA" -d "$APPDIR"
+          CAR="$(ls "$APPDIR"/Payload/*.app/Assets.car)"
+          echo "Assets.car => $CAR"
+          xcrun assetutil --info "$CAR" | grep -i '"idiom" *: *"ios-marketing"' -A2 || { echo "❌ ios-marketing no encontrado en Assets.car"; exit 1; }
+          echo "✅ ios-marketing presente en Assets.car"
+
+      # 12) Inspección Info.plist
       - name: Inspect IPA bundle id & icon name
         shell: bash
         run: |
@@ -275,7 +296,7 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin)"
 
-      # 11) Subida TestFlight
+      # 13) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -297,7 +318,7 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 12) Artefactos
+      # 14) Artefactos
       - name: Upload artifact (IPA)
         uses: actions/upload-artifact@v4
         with:
