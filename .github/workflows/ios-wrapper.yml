@@ -211,14 +211,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
+           dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
           - name: Publish (.xcarchive + .ipa)
           working-directory: ${{ steps.proj.outputs.srcdir }}
           shell: bash
           run: |
           set -euo pipefail
-          PROJ="$(basename "${{ steps.proj.outputs.csproj }}")"
+          PROJ="${{ steps.proj.outputs.csproj }}"
+          echo "Publicando proyecto: $PROJ"
           dotnet publish "$PROJ" \
           -c Release -f net8.0-ios \
           -p:RuntimeIdentifier=ios-arm64 \
