@@ -19,6 +19,7 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # 1) Repos
       - name: Checkout (CI repo)
         uses: actions/checkout@v4
 
@@ -29,6 +30,7 @@ jobs:
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
+      # 2) Herramientas
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -57,6 +59,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # 3) Localizar proyecto y fijar SDK 8.0.415
       - name: Locate project (auto)
         id: proj
         shell: bash
@@ -88,57 +91,57 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # === FIX ICONOS: crear un asset catalog VÁLIDO con raíz + appiconset ===
+      # 4) ICONOS: generar catálogo en Resources/Assets.xcassets con ios-marketing 1024
       - name: Synthesize AppIcon (xcassets with ios-marketing)
-  shell: bash
-  run: |
-    set -euo pipefail
-    SRC="${{ steps.proj.outputs.srcdir }}"
-    ICON_SRC="$SRC/Resources/AppIcon/appicon.png"   # <- tu ruta
-    XC_ROOT="$SRC/Resources/Assets.xcassets"        # <- raíz correcta para MAUI
-    SET_DIR="$XC_ROOT/AppIcon.appiconset"
-    [ -s "$ICON_SRC" ] || { echo "Falta $ICON_SRC"; exit 1; }
-    mkdir -p "$SET_DIR"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="${{ steps.proj.outputs.srcdir }}"
+          ICON_SRC="$SRC/Resources/AppIcon/appicon.png"     # <- tu ruta real
+          XC_ROOT="$SRC/Resources/Assets.xcassets"          # <- raíz correcta para MAUI
+          SET_DIR="$XC_ROOT/AppIcon.appiconset"
+          [ -s "$ICON_SRC" ] || { echo "❌ Falta $ICON_SRC"; exit 1; }
+          mkdir -p "$SET_DIR"
 
-    # Raíz del catálogo
-    cat > "$XC_ROOT/Contents.json" <<'JSON'
-    { "info": { "version": 1, "author": "xcode" } }
-    JSON
+          # Raíz del catálogo (imprescindible)
+          cat > "$XC_ROOT/Contents.json" <<'JSON'
+          { "info": { "version": 1, "author": "xcode" } }
+          JSON
 
-    gen() { local px="$1" name="$2"; sips -s format png "$ICON_SRC" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
-    gen 40  "icon-20@2x.png";   gen 60  "icon-20@3x.png"
-    gen 58  "icon-29@2x.png";   gen 87  "icon-29@3x.png"
-    gen 80  "icon-40@2x.png";   gen 120 "icon-40@3x.png"
-    gen 120 "icon-60@2x.png";   gen 180 "icon-60@3x.png"
-    gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"
-    gen 167 "icon-83.5@2x.png"
-    gen 1024 "icon-marketing.png"
+          gen() { local px="$1" name="$2"; sips -s format png "$ICON_SRC" --resampleWidth "$px" --out "$SET_DIR/$name" >/dev/null; }
+          gen 40  "icon-20@2x.png";   gen 60  "icon-20@3x.png"
+          gen 58  "icon-29@2x.png";   gen 87  "icon-29@3x.png"
+          gen 80  "icon-40@2x.png";   gen 120 "icon-40@3x.png"
+          gen 120 "icon-60@2x.png";   gen 180 "icon-60@3x.png"
+          gen 76  "icon-76.png";      gen 152 "icon-76@2x.png"
+          gen 167 "icon-83.5@2x.png"
+          gen 1024 "icon-marketing.png"
 
-    cat > "$SET_DIR/Contents.json" <<'JSON'
-    {
-      "images": [
-        { "size": "20x20",   "idiom": "iphone", "scale": "2x", "filename": "icon-20@2x.png" },
-        { "size": "20x20",   "idiom": "iphone", "scale": "3x", "filename": "icon-20@3x.png" },
-        { "size": "29x29",   "idiom": "iphone", "scale": "2x", "filename": "icon-29@2x.png" },
-        { "size": "29x29",   "idiom": "iphone", "scale": "3x", "filename": "icon-29@3x.png" },
-        { "size": "40x40",   "idiom": "iphone", "scale": "2x", "filename": "icon-40@2x.png" },
-        { "size": "40x40",   "idiom": "iphone", "scale": "3x", "filename": "icon-40@3x.png" },
-        { "size": "60x60",   "idiom": "iphone", "scale": "2x", "filename": "icon-60@2x.png" },
-        { "size": "60x60",   "idiom": "iphone", "scale": "3x", "filename": "icon-60@3x.png" },
+          cat > "$SET_DIR/Contents.json" <<'JSON'
+          {
+            "images": [
+              { "size": "20x20",   "idiom": "iphone", "scale": "2x", "filename": "icon-20@2x.png" },
+              { "size": "20x20",   "idiom": "iphone", "scale": "3x", "filename": "icon-20@3x.png" },
+              { "size": "29x29",   "idiom": "iphone", "scale": "2x", "filename": "icon-29@2x.png" },
+              { "size": "29x29",   "idiom": "iphone", "scale": "3x", "filename": "icon-29@3x.png" },
+              { "size": "40x40",   "idiom": "iphone", "scale": "2x", "filename": "icon-40@2x.png" },
+              { "size": "40x40",   "idiom": "iphone", "scale": "3x", "filename": "icon-40@3x.png" },
+              { "size": "60x60",   "idiom": "iphone", "scale": "2x", "filename": "icon-60@2x.png" },
+              { "size": "60x60",   "idiom": "iphone", "scale": "3x", "filename": "icon-60@3x.png" },
 
-        { "size": "76x76",   "idiom": "ipad",   "scale": "1x", "filename": "icon-76.png" },
-        { "size": "76x76",   "idiom": "ipad",   "scale": "2x", "filename": "icon-76@2x.png" },
-        { "size": "83.5x83.5","idiom": "ipad",  "scale": "2x", "filename": "icon-83.5@2x.png" },
+              { "size": "76x76",   "idiom": "ipad",   "scale": "1x", "filename": "icon-76.png" },
+              { "size": "76x76",   "idiom": "ipad",   "scale": "2x", "filename": "icon-76@2x.png" },
+              { "size": "83.5x83.5","idiom": "ipad",  "scale": "2x", "filename": "icon-83.5@2x.png" },
 
-        { "size": "1024x1024", "idiom": "ios-marketing", "scale": "1x", "filename": "icon-marketing.png" }
-      ],
-      "properties": { "preRendered": false },
-      "info": { "version": 1, "author": "xcode" }
-    }
-    JSON
+              { "size": "1024x1024", "idiom": "ios-marketing", "scale": "1x", "filename": "icon-marketing.png" }
+            ],
+            "properties": { "preRendered": false },
+            "info": { "version": 1, "author": "xcode" }
+          }
+          JSON
 
-    echo "✅ AppIcon catalog listo en $XC_ROOT"
-
+          echo "📦 Generado catálogo en: $SET_DIR"
+          ls -la "$SET_DIR"
 
       - name: Restore (TFM iOS)
         working-directory: ${{ steps.proj.outputs.srcdir }}
@@ -148,6 +151,7 @@ jobs:
           dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
             -p:TargetFramework=net8.0-ios -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
+      # 5) Firma
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -197,6 +201,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
+      # 6) Compilar, archivar y generar IPA
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -220,7 +225,19 @@ jobs:
           IPA="$(find "$ROOT/publish" -type f -name '*.ipa' -print -quit || true)"
           if [ -z "$IPA" ]; then IPA="$(find "$ROOT" -type f -name '*.ipa' -print -quit || true)"; fi
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
+          echo "IPA => $IPA"
 
+      # 7) Inspeccionar Info.plist dentro del IPA (comprobamos CFBundleIconName)
+      - name: Inspect IPA bundle id & icon name
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
+          echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
+          echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
+
+      # 8) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -242,6 +259,7 @@ jobs:
           xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
+      # 9) Artefactos
       - name: Upload artifact (IPA)
         uses: actions/upload-artifact@v4
         with:
