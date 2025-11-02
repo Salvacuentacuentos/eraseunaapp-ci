@@ -96,29 +96,24 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 5) Opción A: AUTOGENERAR ICONOS DE MAUI
-      #    - Verifica que existe el 1024x1024
-      #    - Elimina catálogos sueltos para que no interfieran
-      #    - Quita CFBundleIconName del .csproj (si estuviera) para que MAUI gestione el catálogo
+      # 5) Opción A: autogeneración de iconos por MAUI
       - name: Use MAUI auto-generated icons
-        shell: bash
         working-directory: ${{ steps.proj.outputs.srcdir }}
+        shell: bash
         run: |
           set -euo pipefail
           ICON=Resources/AppIcon/appicon.png
           [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
 
-          # Borrar catálogos que puedan colisionar
+          # Eliminar catálogos que colisionen y limpiar build
           rm -rf Resources/Assets.xcassets || true
           rm -rf Platforms/iOS/Assets.xcassets || true
-
-          # Eliminar CFBundleIconName del csproj si existe (solo en workspace del runner)
-          CS="${{ steps.proj.outputs.csproj }}"
-          cp "$CS" "$CS.bak"
-          sed -E '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$CS.bak" > "$CS"
-
-          # Limpieza de bin/obj para evitar residuos
           rm -rf bin obj || true
+
+          # Quitar CFBundleIconName del csproj (ya estamos en srcdir)
+          CS_BASENAME="$(basename "${{ steps.proj.outputs.csproj }}")"
+          cp "$CS_BASENAME" "$CS_BASENAME.bak"
+          sed -E '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$CS_BASENAME.bak" > "$CS_BASENAME"
 
       # 6) Firma (keychain + certificado + provisioning)
       - name: Create & unlock keychain
@@ -146,7 +141,6 @@ jobs:
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           P12="$RUNNER_TEMP/dist.p12"
           printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
-          # Importa (si falla, reempaqueta a legacy y reintenta)
           security import "$P12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security || {
             openssl pkcs12 -in "$P12" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/tmp.pem"
             openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -passout pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -out "$RUNNER_TEMP/dist-legacy.p12"
