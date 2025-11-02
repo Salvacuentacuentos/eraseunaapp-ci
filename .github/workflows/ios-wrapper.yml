@@ -215,23 +215,27 @@ jobs:
 
       # 7) Publish (.xcarchive + .ipa) — ruta COMPLETA del csproj
       - name: Publish (.xcarchive + .ipa)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
-          set -euo pipefail
-          PROJ="${{ steps.proj.outputs.csproj }}"
-          echo "Publicando proyecto: $PROJ"
-          dotnet publish "$PROJ" \
-            -c Release -f net8.0-ios \
-            -p:RuntimeIdentifier=ios-arm64 \
-            -p:ArchiveOnBuild=true \
-            -p:BuildIpa=true \
-            -p:PublishTrimmed=true \
-            -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
-            -p:CFBundleIconName=AppIcon \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
-          echo "Publish OK"
+         set -euo pipefail
+         PROJ="$GITHUB_WORKSPACE/${{ steps.proj.outputs.csproj }}"
+         echo "PWD=$PWD"
+         echo "Publicando proyecto: $PROJ"
+         test -f "$PROJ" || { echo "❌ No existe $PROJ"; ls -la "$(dirname "$PROJ")"; exit 1; }
+
+         dotnet publish "$PROJ" \
+         -c Release -f net8.0-ios \
+         -p:RuntimeIdentifier=ios-arm64 \
+         -p:ArchiveOnBuild=true \
+         -p:BuildIpa=true \
+         -p:PublishTrimmed=true \
+         -p:ProvisioningProfileUuid="${{ env.PP_UUID }}" \
+         -p:CFBundleIconName=AppIcon \
+         -p:TreatWarningsAsErrors=false \
+         -p:NoWarn=NU1605
+
+          echo "✅ Publish OK"
+
 
       # 8) Localizar IPA
       - name: Find IPA
