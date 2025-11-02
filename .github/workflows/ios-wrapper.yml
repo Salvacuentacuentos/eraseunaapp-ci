@@ -130,6 +130,7 @@ jobs:
               {"idiom":"iphone","size":"40x40","scale":"3x","filename":"icon-40@3x.png"},
               {"idiom":"iphone","size":"60x60","scale":"2x","filename":"icon-60@2x.png"},
               {"idiom":"iphone","size":"60x60","scale":"3x","filename":"icon-60@3x.png"},
+
               {"idiom":"ipad","size":"20x20","scale":"1x","filename":"icon-20-ipad.png"},
               {"idiom":"ipad","size":"20x20","scale":"2x","filename":"icon-20-ipad@2x.png"},
               {"idiom":"ipad","size":"29x29","scale":"1x","filename":"icon-29-ipad.png"},
@@ -139,6 +140,7 @@ jobs:
               {"idiom":"ipad","size":"76x76","scale":"1x","filename":"icon-76.png"},
               {"idiom":"ipad","size":"76x76","scale":"2x","filename":"icon-76@2x.png"},
               {"idiom":"ipad","size":"83.5x83.5","scale":"2x","filename":"icon-83.5@2x.png"},
+
               {"idiom":"ios-marketing","size":"1024x1024","scale":"1x","filename":"icon-marketing.png"}
             ],
             "info":{"version":1,"author":"xcode"}
@@ -248,54 +250,42 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 10) PARCHE: compilar Assets.car dentro de la .app y RE-FIRMAR, luego re-empaquetar IPA
-      - name: Patch IPA with asset catalog + resign
+      # 10) PARCHE seguro: compilar Assets.car fuera, copiar y re-firmar con --deep
+      - name: Patch IPA with asset catalog + resign (safe)
         id: patchipa
         shell: bash
         run: |
           set -euo pipefail
           IPA_IN="${{ steps.findipa.outputs.ipa }}"
-          APPBASE="$(mktemp -d)"
-          unzip -q "$IPA_IN" -d "$APPBASE"
-          APP_PATH="$(ls "$APPBASE"/Payload/*.app)"
+          WORK_DIR="$(mktemp -d)"
+          unzip -q "$IPA_IN" -d "$WORK_DIR"
+          APP_PATH="$(ls "$WORK_DIR"/Payload/*.app)"
           echo "App => $APP_PATH"
 
-          # Entitlements actuales (para re-firmar igual)
-          ENT="$RUNNER_TEMP/ents.plist"
-          if codesign -d --entitlements :- "$APP_PATH" > "$ENT" 2>/dev/null; then
-            :
-          else
-            echo "⚠️ No se pudieron extraer entitlements; se firmará sin plist explícito."
-            ENT=""
-          fi
+          ASSETS_DIR="${{ steps.proj.outputs.srcdir }}/Resources/Assets.xcassets"
+          [ -d "$ASSETS_DIR" ] || { echo "❌ No existe $ASSETS_DIR"; exit 1; }
 
-          # Compilar catálogo de assets al interior de la app
-          ASSETS="${{ steps.proj.outputs.srcdir }}/Resources/Assets.xcassets"
-          [ -d "$ASSETS" ] || { echo "❌ No existe $ASSETS"; exit 1; }
-          xcrun actool "$ASSETS" \
-            --compile "$APP_PATH" \
+          OUT_DIR="$(mktemp -d)"
+          xcrun actool "$ASSETS_DIR" \
+            --compile "$OUT_DIR" \
             --platform iphoneos \
             --minimum-deployment-target 12.0 \
-            --app-icon AppIcon \
-            --output-partial-info-plist "$RUNNER_TEMP/asset-partial.plist"
+            --app-icon AppIcon
 
-          # Re-firmar frameworks embebidos (si hubiera)
-          if ls "$APP_PATH"/Frameworks/* 1>/dev/null 2>&1; then
-            find "$APP_PATH/Frameworks" -maxdepth 1 -type d | while read F; do
-              xcrun codesign --force --keychain "${KEYCHAIN_PATH}" --sign "${CERT_NAME}" "$F"
-            done
+          [ -s "$OUT_DIR/Assets.car" ] || { echo "❌ actool no generó Assets.car"; ls -la "$OUT_DIR"; exit 1; }
+          cp -f "$OUT_DIR/Assets.car" "$APP_PATH/Assets.car"
+          echo "✅ Copiado Assets.car a la app."
+
+          ENT="$RUNNER_TEMP/ents.plist"; ENT_FLAG=""
+          if codesign -d --entitlements :- "$APP_PATH" > "$ENT" 2>/dev/null; then
+            ENT_FLAG="--entitlements $ENT"
           fi
 
-          # Re-firmar app (usa entitlements si existen)
-          if [ -n "$ENT" ]; then
-            xcrun codesign --force --keychain "${KEYCHAIN_PATH}" --sign "${CERT_NAME}" --options runtime --entitlements "$ENT" "$APP_PATH"
-          else
-            xcrun codesign --force --keychain "${KEYCHAIN_PATH}" --sign "${CERT_NAME}" --options runtime "$APP_PATH"
-          fi
+          xcrun codesign --force --deep --keychain "${KEYCHAIN_PATH}" \
+            --sign "${CERT_NAME}" --options runtime $ENT_FLAG "$APP_PATH"
 
-          # Re-empacar IPA
           NEWIPA="$RUNNER_TEMP/Eraseunaapp_resigned.ipa"
-          (cd "$APPBASE" && zip -qry "$NEWIPA" Payload)
+          (cd "$WORK_DIR" && zip -qry "$NEWIPA" Payload)
           echo "ipa=$NEWIPA" >> $GITHUB_OUTPUT
           echo "Patched IPA => $NEWIPA"
 
@@ -307,12 +297,9 @@ jobs:
           IPA="${{ steps.patchipa.outputs.ipa }}"
           APPDIR="$(mktemp -d)"
           unzip -q "$IPA" -d "$APPDIR"
-          CAR="$(ls "$APPDIR"/Payload/*.app/Assets.car || true)"
-          if [ -z "$CAR" ]; then
-            echo "❌ No se encontró Assets.car en el bundle. Contenido:"
-            ls -la "$APPDIR"/Payload/*.app
-            exit 1
-          fi
+          APP_PATH="$(ls "$APPDIR"/Payload/*.app)"
+          CAR="$APP_PATH/Assets.car"
+          [ -s "$CAR" ] || { echo "❌ No existe Assets.car en $APP_PATH"; ls -la "$APP_PATH"; exit 1; }
           echo "Assets.car => $CAR"
           xcrun assetutil --info "$CAR" | grep -i '"idiom" *: *"ios-marketing"' -A2 || { echo "❌ ios-marketing no encontrado en Assets.car"; exit 1; }
           echo "✅ ios-marketing presente en Assets.car"
