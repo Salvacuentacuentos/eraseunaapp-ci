@@ -1,4 +1,4 @@
-name: iOS TestFlight (MAUI) - iOS only
+name: iOS TestFlight (MAUI) — público ➜ privado
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
-      - name: Point .NET to selected Xcode
+      - name: Point .NET to selected Xcode (DEVELOPER_DIR & MD_APPLE_SDK_ROOT)
         shell: bash
         run: |
           set -euo pipefail
@@ -54,10 +54,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln','**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      # 3) Localizar proyecto y fijar SDK
+      # 3) Localizar proyecto y fijar SDK 8.0.415
       - name: Locate project (auto)
         id: proj
         shell: bash
@@ -87,18 +87,20 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 4) Generar catálogo AppIcon (incluye iPad 152 + ios-marketing 1024)
-      - name: Synthesize AppIcon (Resources/Assets.xcassets)
+      # 4) Crear AppIcon en Platforms/iOS/Assets.xcassets (iPad 152 + ios-marketing 1024)
+      - name: Synthesize AppIcon (Platforms/iOS/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-          ICON=Resources/AppIcon/appicon.png
-          [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
-          rm -rf Resources/Assets.xcassets Platforms/iOS/Assets.xcassets || true
-          XC="Resources/Assets.xcassets"; SET="$XC/AppIcon.appiconset"
-          mkdir -p "$SET"
+          ICON=Resources/AppIcon/appicon.png    # fichero 1024x1024
+          [ -s "$ICON" ] || { echo "❌ Falta $ICON"; exit 1; }
+
+          XC="Platforms/iOS/Assets.xcassets"
+          SET="$XC/AppIcon.appiconset"
+          rm -rf "$SET"; mkdir -p "$SET"
           printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$XC/Contents.json"
+
           gen(){ sips -s format png "$ICON" --resampleWidth "$1" --out "$SET/$2" >/dev/null; }
           # iPhone
           gen 40  icon-20@2x.png;  gen 60  icon-20@3x.png
@@ -111,8 +113,9 @@ jobs:
           gen 40  icon-40-ipad.png;   gen 80  icon-40-ipad@2x.png
           gen 76  icon-76.png;        gen 152 icon-76@2x.png
           gen 167 icon-83.5@2x.png
-          # Marketing 1024
+          # Marketing
           gen 1024 icon-marketing.png
+
           cat > "$SET/Contents.json" <<'JSON'
           {
             "images": [
@@ -140,7 +143,7 @@ jobs:
           JSON
           ls -la "$SET"
 
-      # 5) Neutralizar MauiIcon y CFBundleIconName del csproj en el runner
+      # 5) Desactivar MauiIcon/CFBundleIconName en el csproj del runner (evita conflictos)
       - name: Disable MAUI auto icon generation (edit csproj in runner)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -148,16 +151,15 @@ jobs:
           set -euo pipefail
           CS="${{ steps.proj.outputs.csproj }}"; BN="${CS##*/}"
           cp "$BN" "$BN.bak"
-          # Quitar <MauiIcon .../> y bloques MauiIcon
           sed -E 's@<MauiIcon\b[^>]*/>@@g' "$BN.bak" > "$BN.tmp"
           sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$BN.tmp" > "$BN"
           rm -f "$BN.tmp"
-          # Quitar CFBundleIconName si está; lo forzamos en publish
           sed -E -i '' '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$BN" || true
 
-      # 6) Firma
+      # 6) Firma (keychain, p12, provisioning)
       - name: Create & unlock keychain
-        env: { KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }} }
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -169,17 +171,18 @@ jobs:
           security default-keychain -s "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
-      - name: Import .p12 into keychain
+      - name: Import .p12 into keychain and allow codesign (robust)
+        shell: bash
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
           IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
-        shell: bash
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
           P12="$RUNNER_TEMP/dist.p12"
           printf %s "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > "$P12"
+          openssl pkcs12 -in "$P12" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -info -nokeys >/dev/null 2>&1
           security import "$P12" -k "$KEYCHAIN_PATH" -P "$IOS_DISTRIBUTION_P12_PASSWORD" -A -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security || {
             openssl pkcs12 -in "$P12" -passin pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -nodes -out "$RUNNER_TEMP/tmp.pem"
             openssl pkcs12 -export -in "$RUNNER_TEMP/tmp.pem" -passout pass:"$IOS_DISTRIBUTION_P12_PASSWORD" -out "$RUNNER_TEMP/dist-legacy.p12"
@@ -190,7 +193,8 @@ jobs:
           echo "CERT_NAME=$CERT_NAME" >> "$GITHUB_ENV"
 
       - name: Install provisioning profile (App Store)
-        env: { IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }} }
+        env:
+          IOS_APPSTORE_PROFILE_B64: ${{ secrets.IOS_APPSTORE_PROFILE_B64 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -203,21 +207,21 @@ jobs:
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
       # 7) Restore
-      - name: Restore
+      - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-          dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
+          dotnet restore "$(basename "${{ steps.proj.outputs.csproj }}")" \
+            -p:TargetFramework=net8.0-ios -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
-      # 8) Publicar (sin parche posterior)
+      # 8) Publicar (compila y firma; usa el catálogo AppIcon ya creado)
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
         run: |
           set -euo pipefail
-          PROJ="${{ steps.proj.outputs.csproj }}"; NAME="${PROJ##*/}"
-          dotnet workload restore
+          NAME="$(basename "${{ steps.proj.outputs.csproj }}")"
           dotnet publish "$NAME" \
             -c Release -f net8.0-ios \
             -p:RuntimeIdentifier=ios-arm64 \
@@ -226,7 +230,6 @@ jobs:
             -p:PublishTrimmed=true \
             -p:CFBundleIconName=AppIcon \
             -p:CodesignKey="${CERT_NAME}" \
-            -p:CodesignKeychain="${KEYCHAIN_PATH}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
             -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
@@ -242,14 +245,13 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 10) Verificar que el Assets.car trae ios-marketing
+      # 10) Verificar que el Assets.car tiene ios-marketing
       - name: Verify compiled asset catalog (ios-marketing)
         shell: bash
         run: |
           set -euo pipefail
           IPA="${{ steps.findipa.outputs.ipa }}"
-          APPDIR="$(mktemp -d)"
-          unzip -q "$IPA" -d "$APPDIR"
+          APPDIR="$(mktemp -d)"; unzip -q "$IPA" -d "$APPDIR"
           APP_PATH="$(ls "$APPDIR"/Payload/*.app)"
           CAR="$APP_PATH/Assets.car"
           [ -s "$CAR" ] || { echo "❌ No existe Assets.car en $APP_PATH"; ls -la "$APP_PATH"; exit 1; }
@@ -264,7 +266,7 @@ jobs:
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
-          echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin)"
+          echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
       # 12) Subida TestFlight
       - name: Upload to TestFlight
@@ -285,19 +287,16 @@ jobs:
             if printf '%s' "$CONTENT" | base64 -d > "$KEYFILE" 2>/dev/null; then :; else printf '%b' "$CONTENT" > "$KEYFILE"; fi
           fi
           chmod 600 "$KEYFILE"
+          xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
       # 13) Artefactos
-      - name: Upload artifact (IPA)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-ipa
-          path: ${{ steps.findipa.outputs.ipa }}
-
-      - name: Upload build logs
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-build-logs
-          path: $HOME/Library/Logs/DiagnosticReports/*
+          name: ios-build-artifacts
+          path: |
+            ${{ steps.findipa.outputs.ipa }}
+            $HOME/Library/Logs/DiagnosticReports/*
           if-no-files-found: ignore
