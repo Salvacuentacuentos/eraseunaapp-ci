@@ -98,87 +98,7 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 7) Crear AppIcon en Platforms/iOS/Assets.xcassets (con 152 iPad + 1024 marketing)
-      - name: Synthesize AppIcon (Platforms/iOS/Assets.xcassets)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ICON=Resources/AppIcon/appicon.png
-          [ -s "$ICON" ] || { echo "❌ Falta $ICON (1024x1024 PNG)"; exit 1; }
-
-          XC="Platforms/iOS/Assets.xcassets"
-          SET="$XC/AppIcon.appiconset"
-          rm -rf "$SET"; mkdir -p "$SET"
-          printf '{ "info": { "version": 1, "author": "xcode" } }\n' > "$XC/Contents.json"
-
-          gen(){ sips -s format png "$ICON" --resampleWidth "$1" --out "$SET/$2" >/dev/null; }
-
-          # iPhone
-          gen 40  icon-20@2x.png;  gen 60  icon-20@3x.png
-          gen 58  icon-29@2x.png;  gen 87  icon-29@3x.png
-          gen 80  icon-40@2x.png;  gen 120 icon-40@3x.png
-          gen 120 icon-60@2x.png;  gen 180 icon-60@3x.png
-
-          # iPad (incluye 152)
-          gen 20  icon-20-ipad.png;   gen 40  icon-20-ipad@2x.png
-          gen 29  icon-29-ipad.png;   gen 58  icon-29-ipad@2x.png
-          gen 40  icon-40-ipad.png;   gen 80  icon-40-ipad@2x.png
-          gen 76  icon-76.png;        gen 152 icon-76@2x.png
-          gen 167 icon-83.5@2x.png
-
-          # Marketing 1024
-          gen 1024 icon-marketing.png
-
-          cat > "$SET/Contents.json" <<'JSON'
-          {
-            "images": [
-              {"idiom":"iphone","size":"20x20","scale":"2x","filename":"icon-20@2x.png"},
-              {"idiom":"iphone","size":"20x20","scale":"3x","filename":"icon-20@3x.png"},
-              {"idiom":"iphone","size":"29x29","scale":"2x","filename":"icon-29@2x.png"},
-              {"idiom":"iphone","size":"29x29","scale":"3x","filename":"icon-29@3x.png"},
-              {"idiom":"iphone","size":"40x40","scale":"2x","filename":"icon-40@2x.png"},
-              {"idiom":"iphone","size":"40x40","scale":"3x","filename":"icon-40@3x.png"},
-              {"idiom":"iphone","size":"60x60","scale":"2x","filename":"icon-60@2x.png"},
-              {"idiom":"iphone","size":"60x60","scale":"3x","filename":"icon-60@3x.png"},
-
-              {"idiom":"ipad","size":"20x20","scale":"1x","filename":"icon-20-ipad.png"},
-              {"idiom":"ipad","size":"20x20","scale":"2x","filename":"icon-20-ipad@2x.png"},
-              {"idiom":"ipad","size":"29x29","scale":"1x","filename":"icon-29-ipad.png"},
-              {"idiom":"ipad","size":"29x29","scale":"2x","filename":"icon-29-ipad@2x.png"},
-              {"idiom":"ipad","size":"40x40","scale":"1x","filename":"icon-40-ipad.png"},
-              {"idiom":"ipad","size":"40x40","scale":"2x","filename":"icon-40-ipad@2x.png"},
-              {"idiom":"ipad","size":"76x76","scale":"1x","filename":"icon-76.png"},
-              {"idiom":"ipad","size":"76x76","scale":"2x","filename":"icon-76@2x.png"},
-              {"idiom":"ipad","size":"83.5x83.5","scale":"2x","filename":"icon-83.5@2x.png"},
-
-              {"idiom":"ios-marketing","size":"1024x1024","scale":"1x","filename":"icon-marketing.png"}
-            ],
-            "info":{"version":1,"author":"xcode"}
-          }
-          JSON
-
-          echo "📦 AppIcon.appiconset generado:"
-          ls -la "$SET"
-
-      # 8) Desactivar MauiIcon/CFBundleIconName en el csproj del runner
-      - name: Disable MAUI auto icon generation (edit csproj in runner)
-        working-directory: ${{ steps.proj.outputs.srcdir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          CS="${{ steps.proj.outputs.csproj }}"; BN="${CS##*/}"
-          cp "$BN" "$BN.bak"
-
-          # Quitar <MauiIcon .../>
-          sed -E 's@<MauiIcon\b[^>]*/>@@g' "$BN.bak" > "$BN.tmp"
-          sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$BN.tmp" > "$BN"
-          rm -f "$BN.tmp"
-
-          # Quitar CFBundleIconName si existe
-          sed -E -i '' '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$BN" || true
-
-      # 9) Keychain
+      # 7) Keychain
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -232,7 +152,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
-      # 10) Restore (iOS only)
+      # 8) Restore (iOS only)
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -243,7 +163,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 11) Publicar y generar .ipa
+      # 9) Publicar y generar .ipa
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -257,7 +177,6 @@ jobs:
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
             -p:PublishTrimmed=true \
-            -p:CFBundleIconName=AppIcon \
             -p:CodesignKey="${CERT_NAME}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
             -p:TreatWarningsAsErrors=false \
@@ -276,7 +195,7 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-            # 12) Verificación SOLO informativa de assets (NO debe fallar nunca)
+      # 10) Verificación SOLO informativa de assets (NO debe fallar nunca)
       - name: Verify compiled asset catalog (ios-marketing)
         shell: bash
         run: |
@@ -309,8 +228,7 @@ jobs:
           echo "✅ Verificación de assets completada (no se detiene el workflow aquí)."
           exit 0
 
-
-      # 13) Inspección Info.plist
+      # 11) Inspección Info.plist
       - name: Inspect IPA bundle id & icon name
         shell: bash
         run: |
@@ -320,7 +238,7 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
-      # 14) Subida TestFlight
+      # 12) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -343,7 +261,7 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 15) Artefactos
+      # 13) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
