@@ -89,7 +89,7 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
-      # 4) Catálogo AppIcon en Resources/Assets.xcassets (iPad 152 + ios-marketing 1024)
+      # 4) Catálogo AppIcon en Resources/Assets.xcassets (incluye iPad 152 + ios-marketing 1024)
       - name: Synthesize AppIcon (Resources/Assets.xcassets)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -148,7 +148,7 @@ jobs:
           JSON
           ls -la "$SET"
 
-      # 5) Neutraliza <MauiIcon> y CFBundleIconName antiguos en el runner
+      # 5) Neutralizar <MauiIcon> y CFBundleIconName antiguos en el runner
       - name: Disable MAUI auto icon generation (edit csproj in runner)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -156,7 +156,11 @@ jobs:
           set -euo pipefail
           CS="${{ steps.proj.outputs.csproj }}"; BN="${CS##*/}"
           cp "$BN" "$BN.bak"
-          sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$BN.bak" > "$BN" || true
+          # Elimina bloque MauiIcon y también la forma autocontenida <MauiIcon .../>
+          sed -E 's@<MauiIcon\b[^>]*/>@@g' "$BN.bak" > "$BN.tmp"
+          sed -E '/<MauiIcon\b[^>]*>/,/<\/MauiIcon>/d' "$BN.tmp" > "$BN"
+          rm -f "$BN.tmp"
+          # Elimina CFBundleIconName si existía, lo forzamos en publish
           sed -E -i '' '/<CFBundleIconName>.*<\/CFBundleIconName>/d' "$BN" || true
 
       # 6) Firma (keychain + p12 + provisioning)
@@ -250,7 +254,7 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 10) PARCHE ÚNICO: compilar Assets.car FUERA, copiar y re-firmar con --deep, empaquetar con ditto
+      # 10) PARCHE ÚNICO: compilar Assets.car FUERA, copiar y re-firmar, empaquetar con ditto
       - name: Patch IPA with asset catalog + resign (safe, ditto)
         id: patchipa
         shell: bash
@@ -277,10 +281,8 @@ jobs:
 
           if [ ! -s "$OUT_DIR/Assets.car" ]; then
             echo "❌ actool no generó Assets.car"
-            echo "Contenido OUT_DIR:"; ls -la "$OUT_DIR" || true
-            if [ -f "$OUT_DIR/partial.plist" ]; then
-              echo "---- partial.plist ----"; cat "$OUT_DIR/partial.plist" || true
-            fi
+            ls -la "$OUT_DIR" || true
+            [ -f "$OUT_DIR/partial.plist" ] && cat "$OUT_DIR/partial.plist" || true
             exit 1
           fi
 
@@ -296,7 +298,9 @@ jobs:
             --sign "${CERT_NAME}" --options runtime $ENT_FLAG "$APP_PATH"
 
           NEWIPA="$RUNNER_TEMP/Eraseunaapp_resigned.ipa"
-          xcrun ditto -c -k --sequesterRsrc --keepParent "$WORK_DIR/Payload" "$NEWIPA"
+          pushd "$WORK_DIR" >/dev/null
+          /usr/bin/xcrun ditto -c -k --sequesterRsrc --keepParent "Payload" "$NEWIPA"
+          popd >/dev/null
           echo "ipa=$NEWIPA" >> "$GITHUB_OUTPUT"
           echo "Patched IPA => $NEWIPA"
 
