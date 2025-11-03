@@ -276,27 +276,39 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 12) Verificar assets (solo informativo, NO falla)
+            # 12) Verificación SOLO informativa de assets (NO debe fallar nunca)
       - name: Verify compiled asset catalog (ios-marketing)
         shell: bash
         run: |
-          set -euo pipefail
-          IPA="${{ steps.findipa.outputs.ipa }}"
-          APPDIR="$(mktemp -d)"
-          unzip -q "$IPA" -d "$APPDIR"
-          APP_PATH="$(ls "$APPDIR"/Payload/*.app)"
+          # Desactivar 'exit on error' que pone GitHub por defecto
+          set +e
 
-          echo "📂 Contenido de $(basename "$APP_PATH"):"
-          ls -la "$APP_PATH"
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          echo "🔎 IPA: $IPA"
+
+          APPDIR="$(mktemp -d)"
+          unzip -q "$IPA" -d "$APPDIR" 2>/dev/null
+
+          APP_PATH="$(ls "$APPDIR"/Payload/*.app 2>/dev/null | head -n 1)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ℹ️ No se encontró Payload/*.app dentro de la IPA (solo diagnóstico)."
+            exit 0
+          fi
+
+          echo "📂 Contenido de la app en: $APP_PATH"
+          ls -la "$APP_PATH" 2>/dev/null || true
 
           if [ -d "$APP_PATH/AppIcon" ]; then
             echo "📂 Contenido de AppIcon:"
-            ls -la "$APP_PATH/AppIcon"
+            ls -la "$APP_PATH/AppIcon" 2>/dev/null || true
           else
-            echo "ℹ️ No hay carpeta AppIcon dentro de la app (solo información, no se fuerza error aquí)."
+            echo "ℹ️ No hay carpeta AppIcon (esto es solo informativo, no es error)."
           fi
 
-          echo "✅ Verificación informativa de assets completada (no se detiene el workflow aquí)."
+          echo "✅ Verificación de assets completada (no se detiene el workflow aquí)."
+          exit 0
+
 
       # 13) Inspección Info.plist
       - name: Inspect IPA bundle id & icon name
