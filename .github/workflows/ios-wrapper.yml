@@ -216,7 +216,7 @@ jobs:
           set -euo pipefail
           dotnet restore -p:TreatWarningsAsErrors=false -p:NoWarn=NU1605
 
-      # 8) Publicar (firma) – forzamos CFBundleIconName=AppIcon
+      # 8) Publicar (firma)
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -250,8 +250,8 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
-      # 10) PARCHE: compilar Assets.car FUERA, copiar y re-firmar con --deep (incluye --output-partial-info-plist)
-      - name: Patch IPA with asset catalog + resign (safe)
+      # 10) PARCHE ÚNICO: compilar Assets.car FUERA, copiar y re-firmar con --deep, empaquetar con ditto
+      - name: Patch IPA with asset catalog + resign (safe, ditto)
         id: patchipa
         shell: bash
         run: |
@@ -275,37 +275,11 @@ jobs:
             --app-icon AppIcon \
             --output-partial-info-plist "$OUT_DIR/partial.plist"
 
-                 - name: Patch IPA with asset catalog + resign (safe, ditto)
-                 id: patchipa
-                shell: bash
-                run: |
-          set -euo pipefail
-          IPA_IN="${{ steps.findipa.outputs.ipa }}"
-          WORK_DIR="$(mktemp -d)"
-          unzip -q "$IPA_IN" -d "$WORK_DIR"
-          APP_PATH="$(ls "$WORK_DIR"/Payload/*.app)"
-          echo "App => $APP_PATH"
-
-          ASSETS_DIR="${{ steps.proj.outputs.srcdir }}/Resources/Assets.xcassets"
-          [ -d "$ASSETS_DIR" ] || { echo "❌ No existe $ASSETS_DIR"; exit 1; }
-
-          OUT_DIR="$(mktemp -d)"
-          xcrun actool "$ASSETS_DIR" \
-            --compile "$OUT_DIR" \
-            --platform iphoneos \
-            --target-device iphone \
-            --target-device ipad \
-            --minimum-deployment-target 12.0 \
-            --app-icon AppIcon \
-            --output-partial-info-plist "$OUT_DIR/partial.plist"
-
           if [ ! -s "$OUT_DIR/Assets.car" ]; then
             echo "❌ actool no generó Assets.car"
-            echo "Contenido OUT_DIR:"
-            ls -la "$OUT_DIR" || true
+            echo "Contenido OUT_DIR:"; ls -la "$OUT_DIR" || true
             if [ -f "$OUT_DIR/partial.plist" ]; then
-              echo "---- partial.plist ----"
-              cat "$OUT_DIR/partial.plist" || true
+              echo "---- partial.plist ----"; cat "$OUT_DIR/partial.plist" || true
             fi
             exit 1
           fi
@@ -325,7 +299,6 @@ jobs:
           xcrun ditto -c -k --sequesterRsrc --keepParent "$WORK_DIR/Payload" "$NEWIPA"
           echo "ipa=$NEWIPA" >> "$GITHUB_OUTPUT"
           echo "Patched IPA => $NEWIPA"
-
 
       # 11) Verificar que ahora existe Assets.car y contiene ios-marketing
       - name: Verify compiled asset catalog (ios-marketing)
@@ -352,7 +325,7 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' /dev/stdin)"
 
-      # 13) Subida TestFlight (usa IPA parchada)
+      # 13) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -374,7 +347,7 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 14) Artefactos (IPA final + logs)
+      # 14) Artefactos
       - name: Upload artifact (IPA)
         uses: actions/upload-artifact@v4
         with:
