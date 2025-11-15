@@ -163,7 +163,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 9) Publicar y generar .ipa
+      # 9) Publicar y generar .ipa (forzando Entitlements y sin trimming)
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -176,9 +176,11 @@ jobs:
             -p:RuntimeIdentifier=ios-arm64 \
             -p:ArchiveOnBuild=true \
             -p:BuildIpa=true \
-            -p:PublishTrimmed=true \
+            -p:PublishTrimmed=false \
+            -p:MtouchLink=SdkOnly \
             -p:CodesignKey="${CERT_NAME}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
+            -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
@@ -201,34 +203,27 @@ jobs:
         run: |
           # Desactivar 'exit on error' que pone GitHub por defecto
           set +e
-
           IPA="${{ steps.findipa.outputs.ipa }}"
           echo "🔎 IPA: $IPA"
-
           APPDIR="$(mktemp -d)"
           unzip -q "$IPA" -d "$APPDIR" 2>/dev/null
-
           APP_PATH="$(ls "$APPDIR"/Payload/*.app 2>/dev/null | head -n 1)"
-
           if [ -z "$APP_PATH" ]; then
             echo "ℹ️ No se encontró Payload/*.app dentro de la IPA (solo diagnóstico)."
             exit 0
           fi
-
           echo "📂 Contenido de la app en: $APP_PATH"
           ls -la "$APP_PATH" 2>/dev/null || true
-
           if [ -d "$APP_PATH/AppIcon" ]; then
             echo "📂 Contenido de AppIcon:"
             ls -la "$APP_PATH/AppIcon" 2>/dev/null || true
           else
             echo "ℹ️ No hay carpeta AppIcon (esto es solo informativo, no es error)."
           fi
-
           echo "✅ Verificación de assets completada (no se detiene el workflow aquí)."
           exit 0
 
-      # 11) Inspección Info.plist
+      # 11) Inspección Info.plist (bundle id e icono)
       - name: Inspect IPA bundle id & icon name
         shell: bash
         run: |
@@ -238,7 +233,33 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
-      # 12) Subida TestFlight
+      # 12) Inspeccionar entitlements (debe incluir multicast)
+      - name: Inspect entitlements in IPA (must include multicast)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          APPDIR="$(mktemp -d)"
+          unzip -q "$IPA" -d "$APPDIR"
+          APP_PATH="$(ls "$APPDIR"/Payload/*.app | head -n 1)"
+          echo "App path: $APP_PATH"
+          echo "---- codesign entitlements ----"
+          ENT_XML="$(/usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | plutil -convert xml1 -o - -)"
+          echo "$ENT_XML"
+          echo "---- multicast entitlement check ----"
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.networking.multicast' /dev/stdin <<<"$ENT_XML" || echo "❌ NO multicast entitlement"
+
+      # 13) Verificar NSLocalNetworkUsageDescription
+      - name: Check NSLocalNetworkUsageDescription (Info.plist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPA="${{ steps.findipa.outputs.ipa }}"
+          PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
+          echo "NSLocalNetworkUsageDescription:"
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' /dev/stdin <<<"$PLIST_XML" || echo "⚠️ NSLocalNetworkUsageDescription no encontrado"
+
+      # 14) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -261,7 +282,7 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
-      # 13) Artefactos
+      # 15) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
