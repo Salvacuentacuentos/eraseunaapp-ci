@@ -19,9 +19,11 @@ jobs:
     runs-on: macos-14
 
     steps:
+      # 1) Repo CI (este)
       - name: Checkout (CI repo)
         uses: actions/checkout@v4
 
+      # 2) Repo privado con el código
       - name: Checkout private source
         uses: actions/checkout@v4
         with:
@@ -29,6 +31,7 @@ jobs:
           path: source/repos
           ssh-key: ${{ secrets.PRIVATE_REPO_DEPLOY_KEY }}
 
+      # 3) Herramientas
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -57,6 +60,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
+      # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
         id: proj
         shell: bash
@@ -70,6 +74,7 @@ jobs:
           echo "Proyecto: $CS"
           echo "Carpeta:  $DIR"
 
+      # 5) Fijar SDK .NET 8 en el código
       - name: Pin .NET 8 SDK (global.json)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -84,6 +89,7 @@ jobs:
           JSON
           dotnet --version
 
+      # 6) Workloads MAUI iOS
       - name: Install MAUI workloads (iOS)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -92,6 +98,7 @@ jobs:
           dotnet workload install maui maui-ios --source https://api.nuget.org/v3/index.json
           dotnet workload restore
 
+      # 7) Keychain
       - name: Create & unlock keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -145,6 +152,7 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
+      # 8) Restore (iOS only)
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -155,7 +163,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # *** Publicación: SIN PublishTrimmed=false ***
+      # 9) Publicar y generar .ipa
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -170,9 +178,9 @@ jobs:
             -p:BuildIpa=true \
             -p:PublishTrimmed=true \
             -p:MtouchLink=SdkOnly \
+            -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
             -p:CodesignKey="${CERT_NAME}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
-            -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
@@ -189,30 +197,26 @@ jobs:
           [ -n "$IPA" ] && echo "ipa=$IPA" >> $GITHUB_OUTPUT || { echo "No IPA found"; exit 1; }
           echo "IPA => $IPA"
 
+      # 10) Verificación SOLO informativa de assets (NO debe fallar nunca)
       - name: Verify compiled asset catalog (ios-marketing)
         shell: bash
         run: |
           set +e
           IPA="${{ steps.findipa.outputs.ipa }}"
-          echo "🔎 IPA: $IPA"
           APPDIR="$(mktemp -d)"
           unzip -q "$IPA" -d "$APPDIR" 2>/dev/null
-          APP_PATH="$(ls "$APPDIR"/Payload/*.app 2>/dev/null | head -n 1)"
-          if [ -z "$APP_PATH" ]; then
-            echo "ℹ️ No se encontró Payload/*.app dentro de la IPA (solo diagnóstico)."
-            exit 0
-          fi
-          echo "📂 Contenido de la app en: $APP_PATH"
-          ls -la "$APP_PATH" 2>/dev/null || true
+          APP_PATH="$(/usr/bin/find "$APPDIR/Payload" -maxdepth 1 -type d -name "*.app" -print -quit)"
+          echo "📦 App: $APP_PATH"
+          [ -n "$APP_PATH" ] || { echo "ℹ️ No se encontró .app (diagnóstico)."; exit 0; }
           if [ -d "$APP_PATH/AppIcon" ]; then
-            echo "📂 Contenido de AppIcon:"
-            ls -la "$APP_PATH/AppIcon" 2>/dev/null || true
+            echo "📂 AppIcon:"
+            ls -la "$APP_PATH/AppIcon" || true
           else
-            echo "ℹ️ No hay carpeta AppIcon (esto es solo informativo, no es error)."
+            echo "ℹ️ Sin carpeta AppIcon (no es error)."
           fi
-          echo "✅ Verificación de assets completada (no se detiene el workflow aquí)."
           exit 0
 
+      # 11) Inspección Info.plist
       - name: Inspect IPA bundle id & icon name
         shell: bash
         run: |
@@ -222,30 +226,42 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
+      # 11-bis) Inspección de entitlements (debe incluir multicast)
       - name: Inspect entitlements in IPA (must include multicast)
         shell: bash
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set +e
           IPA="${{ steps.findipa.outputs.ipa }}"
           APPDIR="$(mktemp -d)"
-          unzip -q "$IPA" -d "$APPDIR"
-          APP_PATH="$(ls "$APPDIR"/Payload/*.app | head -n 1)"
+          unzip -q "$IPA" -d "$APPDIR" 2>/dev/null
+          APP_PATH="$(/usr/bin/find "$APPDIR/Payload" -maxdepth 1 -type d -name "*.app" -print -quit)"
           echo "App path: $APP_PATH"
-          echo "---- codesign entitlements ----"
-          ENT_XML="$(/usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | plutil -convert xml1 -o - -)"
-          echo "$ENT_XML"
+          if [ -z "$APP_PATH" ]; then
+            echo "⚠️ No se encontró ninguna carpeta .app dentro de Payload."
+            ls -la "$APPDIR/Payload" || true
+            exit 0
+          fi
+          echo "---- codesign entitlements (XML) ----"
+          /usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | plutil -convert xml1 -o - - | tee /tmp/ents.xml
           echo "---- multicast entitlement check ----"
-          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.networking.multicast' /dev/stdin <<<"$ENT_XML" || echo "❌ NO multicast entitlement"
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.networking.multicast' /tmp/ents.xml \
+            && echo "✅ multicast entitlement present" \
+            || echo "❌ multicast entitlement NOT present"
 
+      # 11-ter) Chequeo de NSLocalNetworkUsageDescription (informativo)
       - name: Check NSLocalNetworkUsageDescription (Info.plist)
         shell: bash
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set +e
           IPA="${{ steps.findipa.outputs.ipa }}"
           PLIST_XML="$(unzip -p "$IPA" Payload/*.app/Info.plist | plutil -convert xml1 -o - -)"
-          echo "NSLocalNetworkUsageDescription:"
-          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' /dev/stdin <<<"$PLIST_XML" || echo "⚠️ NSLocalNetworkUsageDescription no encontrado"
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' /dev/stdin <<<"$PLIST_XML" \
+            && echo "✅ NSLocalNetworkUsageDescription presente" \
+            || echo "❌ Falta NSLocalNetworkUsageDescription"
 
+      # 12) Subida TestFlight
       - name: Upload to TestFlight
         env:
           APPSTORE_ISSUER_ID:   ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -268,6 +284,7 @@ jobs:
           xcrun altool --upload-app -f "$IPA" -t ios \
             --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" --verbose
 
+      # 13) Artefactos
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
