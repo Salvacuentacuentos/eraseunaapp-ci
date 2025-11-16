@@ -152,6 +152,19 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$RAW" "$HOME/Library/MobileDevice/Provisioning Profiles/$PP_UUID.mobileprovision"
 
+      # 7-bis) Chequear que el provisioning profile incluye multicast (capability real)
+      - name: Check multicast in provisioning profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "---- Entitlements del provisioning profile ----"
+          /usr/libexec/PlistBuddy -c 'Print :Entitlements' "$RUNNER_TEMP/profile.plist" | tee /tmp/pp_ents.plist
+          if /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.networking.multicast' "$RUNNER_TEMP/profile.plist" >/dev/null 2>&1; then
+            echo "✅ Perfil incluye com.apple.developer.networking.multicast"
+          else
+            echo "❌ El perfil NO incluye multicast. Activa la capability en el App ID y regenera el perfil."
+          fi
+
       # 8) Restore (iOS only)
       - name: Restore (iOS only)
         working-directory: ${{ steps.proj.outputs.srcdir }}
@@ -163,7 +176,7 @@ jobs:
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
-      # 9) Publicar y generar .ipa
+      # 9) Publicar y generar .ipa  (incluye entitlements + bump de build)
       - name: Publish (.xcarchive + .ipa)
         working-directory: ${{ steps.proj.outputs.srcdir }}
         shell: bash
@@ -181,6 +194,7 @@ jobs:
             -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
             -p:CodesignKey="${CERT_NAME}" \
             -p:ProvisioningProfileUuid="${PP_UUID}" \
+            -p:ApplicationVersion=${{ github.run_number }} \
             -p:TreatWarningsAsErrors=false \
             -p:NoWarn=NU1605
 
@@ -226,7 +240,7 @@ jobs:
           echo "BundleId:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' /dev/stdin)"
           echo "IconName:  $(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName'  /dev/stdin || true)"
 
-      # 11-bis) Inspección de entitlements (debe incluir multicast)
+      # 11-bis) Entitlements efectivos en la IPA (debe incluir multicast)
       - name: Inspect entitlements in IPA (must include multicast)
         shell: bash
         continue-on-error: true
