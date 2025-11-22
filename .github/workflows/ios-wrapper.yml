@@ -53,12 +53,15 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet
-        uses: actions/cache@v4
-        with:
-          path: ~/.nuget/packages
-          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+    uses: actions/cache@v4
+    with:
+    path: |
+      ~/.nuget/packages
+      ~/.local/share/NuGet/v3-cache
+    key: ${{ runner.os }}-nuget-${{ hashFiles('source/repos/**/*.sln', 'source/repos/**/*.csproj') }}
+
+            restore-keys: |
+          ${{ runner.os }}-nuget-
 
       # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
