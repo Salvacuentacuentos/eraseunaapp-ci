@@ -53,15 +53,14 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet
-    uses: actions/cache@v4
-    with:
-    path: |
-      ~/.nuget/packages
-      ~/.local/share/NuGet/v3-cache
-    key: ${{ runner.os }}-nuget-${{ hashFiles('source/repos/**/*.sln', 'source/repos/**/*.csproj') }}
-
-            restore-keys: |
-          ${{ runner.os }}-nuget-
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.nuget/packages
+            ~/.local/share/NuGet/v3-cache
+          key: ${{ runner.os }}-nuget-${{ hashFiles('source/repos/**/*.sln', 'source/repos/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
       # 4) Detectar automáticamente el csproj
       - name: Locate project (auto)
@@ -292,9 +291,7 @@ jobs:
           KEYFILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           CONTENT="${APPSTORE_PRIVATE_KEY}"
           if echo "$CONTENT" | grep -q "BEGIN PRIVATE KEY"; then
-            printf '%b' "$CONTENT" > "$KEYFILE"
-          else
-            if printf '%s' "$CONTENT" | base64 -d > "$KEYFILE" 2>/dev/null; then :; else printf '%b' "$CONTENT" > "$KEYFILE"; fi
+            else printf '%b' "$CONTENT" > "$KEYFILE"; fi
           fi
           chmod 600 "$KEYFILE"
           xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
@@ -311,3 +308,7 @@ jobs:
             ${{ steps.findipa.outputs.ipa }}
             $HOME/Library/Logs/DiagnosticReports/*
           if-no-files-found: ignore
+
+            printf '%b' "$CONTENT" > "$KEYFILE"
+          else
+            if printf '%s' "$CONTENT" | base64 -d > "$KEYFILE" 2>/div
