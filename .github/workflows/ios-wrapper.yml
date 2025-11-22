@@ -58,7 +58,7 @@ jobs:
           path: |
             ~/.nuget/packages
             ~/.local/share/NuGet/v3-cache
-          key: ${{ runner.os }}-nuget-${{ hashFiles('source/repos/**/*.sln', 'source/repos/**/*.csproj') }}
+          key: ${{ runner.os }}-nuget-${{ env.DOTNET_VERSION }}
           restore-keys: |
             ${{ runner.os }}-nuget-
 
