@@ -265,7 +265,7 @@ jobs:
             && echo "✅ multicast entitlement present" \
             || echo "❌ multicast entitlement NOT present"
 
-      # 11-ter) Chequeo de NSLocalNetworkUsageDescription (informativo)
+      # 11-ter) Chequeo de NSLocalNetworkUsageDescription (Info.plist)
       - name: Check NSLocalNetworkUsageDescription (Info.plist)
         shell: bash
         continue-on-error: true
@@ -291,7 +291,9 @@ jobs:
           KEYFILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8"
           CONTENT="${APPSTORE_PRIVATE_KEY}"
           if echo "$CONTENT" | grep -q "BEGIN PRIVATE KEY"; then
-            else printf '%b' "$CONTENT" > "$KEYFILE"; fi
+            printf '%b' "$CONTENT" > "$KEYFILE"
+          else
+            if printf '%s' "$CONTENT" | base64 -d > "$KEYFILE" 2>/dev/null; then :; else printf '%b' "$CONTENT" > "$KEYFILE"; fi
           fi
           chmod 600 "$KEYFILE"
           xcrun altool --list-providers --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID" >/dev/null
@@ -308,7 +310,3 @@ jobs:
             ${{ steps.findipa.outputs.ipa }}
             $HOME/Library/Logs/DiagnosticReports/*
           if-no-files-found: ignore
-
-            printf '%b' "$CONTENT" > "$KEYFILE"
-          else
-            if printf '%s' "$CONTENT" | base64 -d > "$KEYFILE" 2>/div
