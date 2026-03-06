@@ -186,19 +186,20 @@ jobs:
           set -euo pipefail
           PROJ="$(basename "${{ steps.proj.outputs.csproj }}")"
           dotnet publish "$PROJ" \
-            -c Release \
-            -f net8.0-ios \
-            -p:RuntimeIdentifier=ios-arm64 \
-            -p:ArchiveOnBuild=true \
-            -p:BuildIpa=true \
-            -p:PublishTrimmed=true \
-            -p:MtouchLink=SdkOnly \
-            -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
-            -p:CodesignKey="${CERT_NAME}" \
-            -p:ProvisioningProfileUuid="${PP_UUID}" \
-            -p:ApplicationVersion=${{ github.run_number }} \
-            -p:TreatWarningsAsErrors=false \
-            -p:NoWarn=NU1605
+          -c Release \
+          -f net8.0-ios \
+          -p:RuntimeIdentifier=ios-arm64 \
+          -p:ArchiveOnBuild=true \
+          -p:BuildIpa=true \
+          -p:PublishTrimmed=true \
+          -p:MtouchLink=SdkOnly \
+          -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
+          -p:CodesignKey="${CERT_NAME}" \
+          -p:ProvisioningProfileUuid="${PP_UUID}" \
+          -p:ApplicationDisplayVersion=1.0 \
+          -p:ApplicationVersion=${{ github.run_number }} \
+          -p:TreatWarningsAsErrors=false \
+          -p:NoWarn=NU1605
 
       - name: Find IPA
         id: findipa
