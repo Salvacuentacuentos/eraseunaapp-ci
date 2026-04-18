@@ -196,7 +196,7 @@ jobs:
           -p:CodesignEntitlements=Platforms/iOS/Entitlements.plist \
           -p:CodesignKey="${CERT_NAME}" \
           -p:ProvisioningProfileUuid="${PP_UUID}" \
-          -p:ApplicationDisplayVersion=1.0.11 \
+          -p:ApplicationDisplayVersion=1.0.12 \
           -p:ApplicationVersion=${{ github.run_number }} \
           -p:TreatWarningsAsErrors=false \
           -p:NoWarn=NU1605
